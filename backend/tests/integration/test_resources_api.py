@@ -32,10 +32,10 @@ def test_resources_empty_without_connections_and_isolated(api: TestClient, conne
     assert r.status_code == 404
 
 
-def test_live_discovery_not_available_yet(db_settings):
+def test_live_discovery_for_other_services_not_available_yet(db_settings):
     live = db_settings.model_copy(update={"aws_mode": AwsMode.LIVE})
     with TestClient(create_app(live), headers={"X-CloudSage-User": ALICE}) as c:
-        assert c.get("/api/v1/resources").status_code == 501
+        assert c.get("/api/v1/resources", params={"service": "rds"}).status_code == 501
 
 
 def test_dashboard_counts(api: TestClient, connection: dict):

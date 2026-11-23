@@ -18,8 +18,8 @@ networking, hosting, CI/CD) is owned by the infrastructure engineer and is out o
 | 1 | Application foundation and UI | **Done** (7 pages on mock data: Overview, AI Assistant, Investigations, Investigation report, Infrastructure, AWS Connections, Settings) |
 | 2 | Backend API and PostgreSQL | **Done** (models, migrations, versioned REST API, SSE, per-user isolation; UI wired to the API) |
 | 3 | Amazon Bedrock integration | **Done** (Strands + Bedrock model from settings, injection-resistant evidence handling, evidence-cited report synthesis) |
-| 4 | EC2 and CloudWatch tools | Next |
-| 5 | Agent orchestration, multi-step investigations, SSE | Planned |
+| 4 | EC2 and CloudWatch tools | **Done** (read-only EC2 and CloudWatch tools, scoped STS sessions, evidence recording, live EC2 discovery) |
+| 5 | Agent orchestration, multi-step investigations, SSE | Next |
 | 6 | ECS, RDS, Lambda | Planned |
 | 7 | History/reports on real data, security hardening | Planned |
 | 8 | Testing, Docker, deployment documentation | Planned |
@@ -52,7 +52,7 @@ createdb -O cloudsage cloudsage_test
 ```bash
 cd backend
 cp .env.example .env      # CLOUDSAGE_AWS_MODE=mock needs no AWS account
-uv sync
+uv sync                   # or: pip install -r requirements-dev.txt
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload    # http://localhost:8000/docs
 uv run pytest             # integration tests skip if cloudsage_test is unreachable
@@ -63,6 +63,14 @@ To run the UI against the backend, set `VITE_USE_MOCKS=false` in `frontend/.env`
 development the API identifies the caller with an `X-CloudSage-User` email header, falling back to
 `CLOUDSAGE_DEV_DEFAULT_USER_EMAIL`. That dev mode is refused when `CLOUDSAGE_ENVIRONMENT=production`;
 OIDC sign-in arrives with security hardening in Phase 7.
+
+`requirements.txt` (runtime) and `requirements-dev.txt` (runtime plus test tools) are exported
+from `uv.lock` for pip users. After changing dependencies, regenerate them:
+```bash
+uv export --frozen --no-hashes --no-dev --no-emit-project -o requirements.txt
+uv export --frozen --no-hashes --only-group dev --no-emit-project -o requirements-dev.txt
+```
+then put `-r requirements.txt` back at the top of `requirements-dev.txt`.
 
 ### API (v1)
 | Method | Path | Purpose |
@@ -84,8 +92,20 @@ Investigations stay `queued` until the agent runs them (Phase 5).
 Set `CLOUDSAGE_BEDROCK_MODEL_ID` and `CLOUDSAGE_BEDROCK_REGION`, make AWS credentials available
 through the usual chain (for example `aws sso login` locally, an IAM role when deployed), then
 check access with `uv run python -m app.agent.check`. Tests never call Bedrock; they use a scripted
-stand-in model. Live resource discovery
-returns 501 until the AWS tools land in Phase 4; mock mode serves sample resources.
+stand-in model.
+
+### AWS tools
+Investigations gather evidence with read-only tools: `ec2_describe_instances`,
+`ec2_describe_instance_status`, `cloudwatch_get_metric_data`, `cloudwatch_describe_alarms`,
+`logs_filter_log_events` and `logs_describe_log_groups`. In `CLOUDSAGE_AWS_MODE=live` each
+investigation assumes the connection's role through STS and uses only those temporary
+credentials. In `mock` mode the same tools read a fixed sample story (an API worker whose disk
+filled up), so no AWS account is needed. Live discovery covers EC2 today; asking for ECS, RDS or
+Lambda in live mode returns 501 until Phase 6. Tests use moto and never reach AWS.
+
+The role needs only read permissions for these calls: `ec2:DescribeInstances`,
+`ec2:DescribeInstanceStatus`, `cloudwatch:GetMetricData`, `cloudwatch:DescribeAlarms`,
+`logs:FilterLogEvents` and `logs:DescribeLogGroups`. CloudSage does not create the role.
 
 All configuration comes from environment variables (see each `.env.example`). No AWS credentials,
 account IDs, regions or Bedrock model IDs are hardcoded.

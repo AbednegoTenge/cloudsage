@@ -91,12 +91,22 @@ backend/
 Each tool declares:
 - `name`, `service` (`ec2`, `ecs`, ...), `description` (for the model)
 - `Input` Pydantic model (validated identifiers, bounded time ranges, max results)
-- `Output` Pydantic model (structured, JSON-serialisable evidence)
-- `run(ctx: AwsContext, input) -> Output`, raising typed `ToolError`s
+- `run(ctx: AwsContext, input) -> dict` (JSON-serialisable evidence), raising `ToolError` for
+  expected failures
+- `operations`: the AWS API calls it makes. Registration refuses anything that does not start
+  with Describe, List, Get, Filter or Lookup, so a write call cannot slip in.
 
-The registry exposes tools to Strands as `@tool` functions and records each call as a
-`ToolExecution` row (input, output, duration, status). Adding a service = adding a module that
-registers its tools; the agent and orchestrator do not change.
+`AwsContext` (`aws/context.py`) is built per investigation from the connection: STS
+`AssumeRole` temporary credentials (live) or canned clients (mock), the account, the region, the
+allowed regions and the investigation's time window. It checks ARNs against the account and
+region and clamps every time range to the window.
+
+`ToolRunner` (`tools/runner.py`) is the only way the agent calls a tool. It enforces the
+tool-call limit, validates input (unknown fields rejected), runs the tool in a thread with a
+timeout, redacts and size-caps the output, and records a `ToolExecution` row plus a
+`tool_completed` or `tool_failed` event. Failures are recorded as evidence, not raised.
+Adding a service means adding a module that registers its tools; the agent and orchestrator do
+not change.
 
 Tools that return time series or log lines use two shared output shapes, so the report can show
 them without the model retyping any numbers:
