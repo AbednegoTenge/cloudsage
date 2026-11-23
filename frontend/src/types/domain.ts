@@ -48,6 +48,8 @@ export interface Investigation {
   completedAt: string | null;
   toolCallCount: number;
   severity?: "info" | "low" | "medium" | "high" | "critical";
+  /** One-line outcome shown in lists; taken from the report summary. */
+  summary?: string;
 }
 
 export type InvestigationEventType =
@@ -97,8 +99,11 @@ export interface Observation {
 
 export interface Hypothesis {
   /** A potential root cause inferred from observations. Never presented as fact. */
+  title?: string;
   statement: string;
   confidence: Confidence;
+  /** Model-estimated likelihood 0-1, when available. */
+  score?: number;
   supportingObservations: number[];
 }
 
@@ -144,6 +149,17 @@ export interface CreateInvestigationRequest {
   timeRangeHours: number;
 }
 
+/** A resource returned by discovery (Infrastructure page / resources API). */
+export interface DiscoveredResource {
+  service: AwsService;
+  resourceType: string;
+  identifier: string;
+  name: string;
+  region: string;
+  health: ResourceHealth;
+  observedAt: string;
+}
+
 export interface DashboardSummary {
   investigationsLast7d: number;
   openIssues: number;
@@ -151,6 +167,7 @@ export interface DashboardSummary {
   resourcesMonitored: Record<AwsService, number>;
   healthByService: { service: AwsService; healthy: number; degraded: number; unhealthy: number }[];
   dailyInvestigations: { day: string; count: number }[];
+  healthTimeline: { t: string; healthy: number; unhealthy: number }[];
 }
 
 export interface UserSettings {
@@ -161,4 +178,12 @@ export interface UserSettings {
   showRawEvidenceByDefault: boolean;
   maxToolCalls: number;
   investigationTimeoutSec: number;
+  defaultRegion: string;
+  investigationDepth: "fast" | "balanced" | "thorough";
+  autoOpenReport: boolean;
+  includeLogs: boolean;
+  includeDeployments: boolean;
+  notifyOnFailed: boolean;
+  notifyOnCompleted: boolean;
+  weeklyDigest: boolean;
 }

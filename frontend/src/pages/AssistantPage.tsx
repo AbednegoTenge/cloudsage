@@ -1,56 +1,118 @@
-import { ArrowRight, Bot, CheckCircle2, Circle, Loader2, Lock, Send, XCircle } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { ArrowRight, Clock, CloudCog, FlaskConical, Globe, History, Lightbulb, Lock, Paperclip, Send, Server, Sparkles, User } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { InvestigationStatusBadge, ServiceTag } from "../components/domain";
-import { Button, Card, Field, PageHeader } from "../components/ui";
+import { InlineReport, Timeline } from "../components/report";
+import { Badge } from "../components/ui";
 import { useScope } from "../context/ScopeContext";
 import { formatTime } from "../lib/format";
-import type { Investigation, InvestigationEvent } from "../types/domain";
+import type { Investigation, InvestigationDetail, InvestigationEvent } from "../types/domain";
 
 const EXAMPLES = [
-  "Investigate why EC2 instance i-0a1b2c3d4e5f67890 is unhealthy.",
   "Find unhealthy EC2 instances in my AWS account.",
+  "Investigate why EC2 instance i-0a1b2c3d4e5f67890 is unhealthy.",
   "Why is the ECS service payments-api not finishing its deployment?",
   "The Lambda function order-processor is throwing errors. What changed?",
-  "Is RDS instance orders-db under CPU or storage pressure?",
 ];
-
 const TIME_RANGES = [1, 3, 6, 12, 24, 72, 168];
 
-export function EventIcon({ type }: { type: InvestigationEvent["type"] }) {
-  if (type === "tool_completed" || type === "report_ready") return <span className="tl-icon ok"><CheckCircle2 size={13} /></span>;
-  if (type === "tool_failed" || type === "failed") return <span className="tl-icon bad"><XCircle size={13} /></span>;
-  if (type === "tool_started" || type === "analyzing" || type === "planning") return <span className="tl-icon accent"><Loader2 size={13} /></span>;
-  return <span className="tl-icon"><Circle size={10} /></span>;
+interface Turn {
+  investigation: Investigation;
+  events: InvestigationEvent[];
+  detail?: InvestigationDetail;
+}
+
+function greeting(): string {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
+function AgentTurn({ turn, onUpdate }: { turn: Turn; onUpdate: (t: Turn) => void }) {
+  const turnRef = useRef(turn);
+  turnRef.current = turn;
+  useEffect(() => {
+    const seen = new Set<string>();
+    return api.streamInvestigationEvents(turn.investigation.id, (e) => {
+      if (seen.has(e.id)) return;
+      seen.add(e.id);
+      const cur = turnRef.current;
+      const next = { ...cur, events: [...cur.events, e] };
+      turnRef.current = next;
+      onUpdate(next);
+      if (e.type === "report_ready") {
+        void api.getInvestigation(turn.investigation.id).then((detail) => {
+          const withDetail = { ...turnRef.current, detail };
+          turnRef.current = withDetail;
+          onUpdate(withDetail);
+        });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turn.investigation.id]);
+
+  const inv = turn.investigation;
+  const done = turn.events.some((e) => e.type === "report_ready");
+  const failed = turn.events.some((e) => e.type === "failed");
+  const status: Investigation["status"] = done ? "completed" : failed ? "failed" : turn.events.length > 1 ? "running" : "queued";
+
+  return (
+    <div className="msg">
+      <span className="msg-avatar agent"><CloudCog size={16} /></span>
+      <div className="stack-lg" style={{ minWidth: 0 }}>
+        <div>
+          <div className="msg-head">CloudSage <span className="xs faint">AI Agent</span><span className="xs faint mono">{formatTime(inv.createdAt)}</span></div>
+          <div className="row wrap small muted">
+            <span className="mono">{inv.id.toUpperCase()}</span>·<span className="mono">{inv.accountId}</span>·<span className="mono">{inv.region}</span>·
+            <span>{inv.identificationMode === "explicit" ? "explicit resource" : "auto-discovery"}</span>
+            {inv.services.map((s) => <ServiceTag key={s} service={s} />)}
+            <InvestigationStatusBadge status={status} />
+          </div>
+        </div>
+        <section className="card" style={{ padding: "14px 18px" }}>
+          <Timeline events={turn.events} label="Investigation progress" />
+        </section>
+        {turn.detail && (
+          <>
+            <p className="small muted">Investigation complete. Observed evidence below comes from read-only AWS tool calls; root causes and recommendations are AI-generated hypotheses and labelled as such.</p>
+            <InlineReport detail={turn.detail} />
+          </>
+        )}
+        {done && (
+          <div><Link to={`/investigations/${inv.id}`} className="btn btn-primary">Open full report <ArrowRight size={14} /></Link></div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function AssistantPage() {
-  const { connection, region, connections, setConnectionId, setRegion } = useScope();
-  const [prompt, setPrompt] = useState("");
+  const { connection, region, setRegion } = useScope();
+  const [params] = useSearchParams();
+  const [prompt, setPrompt] = useState(params.get("prompt") ?? "");
+  const [resource, setResource] = useState("");
   const [hours, setHours] = useState(6);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
-  const [current, setCurrent] = useState<Investigation>();
-  const [events, setEvents] = useState<InvestigationEvent[]>([]);
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!current) return;
-    setEvents([]);
-    return api.streamInvestigationEvents(current.id, (e) => setEvents((prev) => (prev.some((p) => p.id === e.id) ? prev : [...prev, e])));
-  }, [current]);
+    scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [turns]);
 
-  const done = events.some((e) => e.type === "report_ready");
-  const failed = events.some((e) => e.type === "failed");
-  const status: Investigation["status"] = done ? "completed" : failed ? "failed" : events.length > 1 ? "running" : "queued";
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!connection || !prompt.trim()) return;
+  async function submit(e?: FormEvent, text = prompt) {
+    e?.preventDefault();
+    const body = text.trim();
+    if (!connection || !body) return;
+    const full = resource.trim() ? `${body} (resource: ${resource.trim()})` : body;
     setSubmitting(true);
     setError(undefined);
     try {
-      setCurrent(await api.createInvestigation({ prompt: prompt.trim(), connectionId: connection.id, region, timeRangeHours: hours }));
+      const investigation = await api.createInvestigation({ prompt: full, connectionId: connection.id, region, timeRangeHours: hours });
+      setTurns((t) => [...t, { investigation, events: [] }]);
+      setPrompt("");
+      setResource("");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -59,92 +121,99 @@ export function AssistantPage() {
   }
 
   return (
-    <div className="page">
-      <PageHeader
-        title="AI Assistant"
-        subtitle="Describe an operational problem. CloudSage identifies the resources, gathers read-only evidence and reports what it found."
-      />
-
-      <div className="grid grid-main-side">
-        <Card title={<div className="row"><Bot size={16} /><h2>New investigation</h2></div>}>
-          <form className="composer" onSubmit={submit}>
-            <textarea
-              className="textarea"
-              aria-label="Investigation request"
-              placeholder='e.g. "Investigate why EC2 instance i-0123456789abcdef0 is unhealthy" or "Find unhealthy EC2 instances"'
-              value={prompt}
-              maxLength={2000}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit(e);
-              }}
-            />
-            <div className="scope-row">
-              <Field label="AWS account" htmlFor="as-conn">
-                <select id="as-conn" className="select" value={connection?.id ?? ""} onChange={(e) => setConnectionId(e.target.value)}>
-                  {connections.map((c) => (
-                    <option key={c.id} value={c.id} disabled={c.status === "error"}>{c.name} ({c.accountId})</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Region" htmlFor="as-region">
-                <select id="as-region" className="select" value={region} onChange={(e) => setRegion(e.target.value)}>
-                  {(connection?.allowedRegions ?? []).map((r) => <option key={r}>{r}</option>)}
-                </select>
-              </Field>
-              <Field label="Time range" htmlFor="as-range">
-                <select id="as-range" className="select" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
-                  {TIME_RANGES.map((h) => <option key={h} value={h}>{h < 48 ? `Last ${h} h` : `Last ${h / 24} days`}</option>)}
-                </select>
-              </Field>
-              <Button type="submit" variant="primary" disabled={!prompt.trim() || !connection || submitting}>
-                <Send size={14} /> {submitting ? "Starting..." : "Investigate"}
-              </Button>
-            </div>
-            {error && <div className="callout bad" role="alert">{error}</div>}
-            <div className="row small faint"><Lock size={12} /> Read-only. CloudSage never modifies AWS resources. Ctrl/⌘ + Enter to submit.</div>
-          </form>
-        </Card>
-
-        <Card title="Try an example">
-          <div className="chips" style={{ flexDirection: "column" }}>
-            {EXAMPLES.map((ex) => (
-              <button key={ex} type="button" className="chip" onClick={() => setPrompt(ex)}>{ex}</button>
-            ))}
-          </div>
-        </Card>
+    <div className="workspace">
+      <div className="workspace-head">
+        <div>
+          <div className="row"><Sparkles size={15} style={{ color: "var(--primary)" }} /><h1 style={{ fontSize: 15 }}>AI Assistant</h1><Badge tone="info">Investigation workspace</Badge></div>
+          <p className="small muted" style={{ marginTop: 4 }}>Investigate AWS infrastructure, analyze metrics, and identify operational issues.</p>
+        </div>
+        <Link to="/investigations" className="btn"><History size={14} /> Investigation history</Link>
       </div>
 
-      {current && (
-        <Card
-          title={
-            <div className="stack" style={{ gap: 2 }}>
-              <div className="row"><h2>{current.title}</h2></div>
-              <div className="row small faint">
-                <span className="mono">{current.id}</span> · {current.accountId} · {current.region} ·
-                {current.identificationMode === "explicit" ? " explicit resource" : " auto-discovery"}
-                {current.services.map((s) => <ServiceTag key={s} service={s} />)}
+      <div className="workspace-scroll" ref={scrollRef}>
+        <div className="workspace-inner">
+          {turns.length === 0 ? (
+            <>
+              <div className="hero">
+                <div className="brand-mark"><Sparkles size={20} /></div>
+                <h2>{greeting()}. What would you like to investigate today?</h2>
+                <p>Ask CloudSage to investigate your AWS infrastructure, analyze metrics, and identify potential operational issues.</p>
               </div>
-            </div>
-          }
-          actions={<InvestigationStatusBadge status={status} />}
-        >
-          <ol className="timeline" aria-label="Investigation progress" aria-live="polite">
-            {events.map((e) => (
-              <li key={e.id}>
-                <EventIcon type={e.type} />
-                <span className={e.toolExecutionId ? "mono" : ""}>{e.message}</span>
-                <span className="tl-time">{formatTime(e.createdAt)}</span>
-              </li>
-            ))}
-          </ol>
-          {done && (
-            <div className="row" style={{ marginTop: 12 }}>
-              <Link to={`/investigations/${current.id}`} className="btn btn-primary">View report <ArrowRight size={14} /></Link>
-            </div>
+              <div className="stack">
+                <span className="label-caps row"><Lightbulb size={13} /> Suggested prompts</span>
+                <div className="prompt-grid">
+                  {EXAMPLES.map((ex) => (
+                    <button key={ex} type="button" className="prompt-card" onClick={() => setPrompt(ex)}>
+                      <span className="icon-tile sm"><Sparkles size={13} /></span>
+                      <span>{ex}</span>
+                      <ArrowRight size={14} className="arrow" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="info-tiles">
+                <div className="info-tile"><span className="label-caps">Investigation stages</span><strong>Plan · Discover · Analyze · Report</strong></div>
+                <div className="info-tile"><span className="label-caps">Evidence sources</span><strong>Describe APIs · Metrics · Logs</strong></div>
+                <div className="info-tile"><span className="label-caps">Hypothesis clarity</span><strong>Facts vs hypotheses, scored</strong></div>
+              </div>
+            </>
+          ) : (
+            turns.map((t, i) => (
+              <div key={t.investigation.id} className="stack-lg">
+                <div className="msg">
+                  <span className="msg-avatar"><User size={15} /></span>
+                  <div>
+                    <div className="msg-head">You <span className="xs faint mono">{formatTime(t.investigation.createdAt)}</span></div>
+                    <p>{t.investigation.prompt}</p>
+                  </div>
+                </div>
+                <AgentTurn turn={t} onUpdate={(next) => setTurns((all) => all.map((x, j) => (j === i ? next : x)))} />
+              </div>
+            ))
           )}
-        </Card>
-      )}
+        </div>
+      </div>
+
+      <div className="composer-wrap">
+        <form className="composer" onSubmit={submit}>
+          <textarea
+            aria-label="Investigation request"
+            placeholder="Ask CloudSage about your AWS infrastructure..."
+            value={prompt}
+            maxLength={2000}
+            rows={2}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+          />
+          <div className="composer-tools">
+            <span className="icon-btn" style={{ width: 30, height: 30 }} aria-hidden title="Attachments arrive in a later phase"><Paperclip size={14} /></span>
+            <label className="mini-select"><Globe size={13} />
+              <select aria-label="Region" value={region} onChange={(e) => setRegion(e.target.value)}>
+                {(connection?.allowedRegions ?? []).map((r) => <option key={r}>{r}</option>)}
+              </select>
+            </label>
+            <label className="mini-select"><Clock size={13} />
+              <select aria-label="Time range" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
+                {TIME_RANGES.map((h) => <option key={h} value={h}>{h < 48 ? `Last ${h}h` : `Last ${h / 24}d`}</option>)}
+              </select>
+            </label>
+            <label className="mini-select hide-mobile"><Server size={13} />
+              <input aria-label="Resource (optional)" placeholder="Resource (optional)" value={resource} onChange={(e) => setResource(e.target.value)} maxLength={256} />
+            </label>
+            <span className="row xs faint hide-mobile" style={{ marginLeft: "auto" }}><Lock size={11} /> Read-only</span>
+            <button type="submit" className="btn btn-primary" disabled={!prompt.trim() || !connection || submitting} style={{ marginLeft: 8 }}>
+              <Send size={13} /> {submitting ? "Starting..." : "Send"}
+            </button>
+          </div>
+          {error && <div className="callout bad small" role="alert">{error}</div>}
+        </form>
+        <p className="composer-foot"><FlaskConical size={11} style={{ verticalAlign: -1 }} /> Local development uses sample AWS data. CloudSage never modifies AWS resources.</p>
+      </div>
     </div>
   );
 }

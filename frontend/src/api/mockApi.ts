@@ -2,7 +2,7 @@
 // The "agent" here is a scripted simulation so the UI can be exercised end to end;
 // the real interpretation and planning happens in the backend agent (Phase 5).
 import type { CloudSageApi } from "./client";
-import { mockConnections, mockDashboard, mockDetail, mockInvestigations, mockSettings } from "../mocks/data";
+import { mockConnections, mockDashboard, mockDetail, mockInvestigations, mockResources, mockSettings } from "../mocks/data";
 import type {
   AwsConnection,
   AwsService,
@@ -179,6 +179,7 @@ export function createMockApi(): CloudSageApi {
       listeners.get(id)!.add(onEvent);
       return () => listeners.get(id)?.delete(onEvent);
     },
+    listResources: (f) => delay(mockResources.filter((r) => !f?.service || r.service === f.service)),
     listConnections: () => delay(connections),
     async createConnection(input) {
       const c: AwsConnection = { ...input, id: `conn-${Math.random().toString(36).slice(2, 8)}`, status: "unvalidated", lastValidatedAt: null };

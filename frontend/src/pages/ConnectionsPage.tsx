@@ -1,8 +1,8 @@
-import { CheckCircle2, KeyRound, Plug, Plus, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { CheckCircle2, Clock, KeyRound, Lock, Plug, Plus, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api } from "../api/client";
 import { ConnectionStatusBadge } from "../components/domain";
-import { Badge, Button, Card, EmptyState, ErrorCallout, Field, PageHeader, Spinner } from "../components/ui";
+import { Button, Card, DemoNote, EmptyState, ErrorCallout, Field, PageHeader, Spinner } from "../components/ui";
 import { useScope } from "../context/ScopeContext";
 import { useAsync } from "../hooks/useAsync";
 import { relativeTime } from "../lib/format";
@@ -36,50 +36,66 @@ export function ConnectionsPage() {
     <div className="page">
       <PageHeader
         title="AWS connections"
-        subtitle="CloudSage reaches each AWS account by assuming a read-only IAM role with temporary credentials."
+        subtitle="Manage the cross-account IAM role connections CloudSage uses to investigate your AWS infrastructure."
         actions={<Button variant="primary" onClick={() => setAdding(true)}><Plus size={14} /> Add connection</Button>}
       />
-      <div className="callout info">
-        <ShieldCheck size={16} style={{ flex: "none", marginTop: 2 }} />
-        <div className="small">
-          <strong>No access keys are ever stored.</strong> Each connection is an IAM role ARN (plus optional external ID) that the CloudSage
-          backend assumes via STS for each investigation. The role and its trust policy are provisioned by your infrastructure team.
+      <section className="callout info" style={{ padding: 18 }}>
+        <span className="icon-tile" style={{ flex: "none" }}><ShieldCheck size={16} /></span>
+        <div className="stack" style={{ gap: 6 }}>
+          <strong style={{ fontSize: 14 }}>CloudSage uses temporary credentials. No long-lived AWS access keys.</strong>
+          <span className="small muted">
+            Each connection is an IAM role ARN (plus optional external ID). For every investigation the backend calls STS <span className="mono">AssumeRole</span> and
+            receives a short-lived credential scoped to that role's read-only permissions. The role and its trust policy are provisioned by your infrastructure team.
+          </span>
+          <div className="row wrap" style={{ marginTop: 4 }}>
+            <span className="tag-chip"><KeyRound size={11} /> STS AssumeRole</span>
+            <span className="tag-chip"><Clock size={11} /> 15-60 min credentials</span>
+            <span className="tag-chip"><Lock size={11} /> Read-only, least privilege</span>
+          </div>
         </div>
-      </div>
+      </section>
 
       {list.error && <ErrorCallout error={list.error} />}
+      {list.data?.filter((c) => c.statusMessage).map((c) => (
+        <div key={c.id} className="callout bad small" role="status">
+          <strong style={{ color: "var(--unhealthy)" }}>{c.name}:</strong> {c.statusMessage}
+        </div>
+      ))}
       {!list.data ? (
         <Spinner />
       ) : list.data.length === 0 ? (
         <Card><EmptyState icon={<Plug size={28} />} title="No AWS connections yet">Add one to start investigating.</EmptyState></Card>
       ) : (
-        <div className="grid grid-3">
-          {list.data.map((c) => (
-            <Card
-              key={c.id}
-              title={<div className="stack" style={{ gap: 2 }}><h2>{c.name}</h2><span className="mono small faint">{c.accountId}</span></div>}
-              actions={<ConnectionStatusBadge status={c.status} />}
-            >
-              <div className="stack-lg">
-                <dl className="kv">
-                  <dt>Role</dt><dd className="mono small">{c.roleArn}</dd>
-                  <dt>External ID</dt><dd className="small">{c.externalId ? <span className="mono">{c.externalId}</span> : <span className="faint">None</span>}</dd>
-                  <dt>Default region</dt><dd className="small">{c.defaultRegion}</dd>
-                  <dt>Allowed regions</dt><dd><div className="row wrap" style={{ gap: 4 }}>{c.allowedRegions.map((r) => <Badge key={r}>{r}</Badge>)}</div></dd>
-                  <dt>Last validated</dt><dd className="small">{c.lastValidatedAt ? relativeTime(c.lastValidatedAt) : <span className="faint">Never</span>}</dd>
-                </dl>
-                {c.statusMessage && <div className="callout bad small">{c.statusMessage}</div>}
-                <div className="row">
-                  <Button size="sm" onClick={() => validate(c)} disabled={validating === c.id}>
-                    {validating === c.id ? <span className="spinner" /> : <RefreshCw size={13} />} Validate
-                  </Button>
-                  <Button size="sm" variant="ghost" className="btn-danger" onClick={() => remove(c)} aria-label={`Remove ${c.name}`}><Trash2 size={13} /> Remove</Button>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
+        <section className="card">
+          <div className="table-wrap">
+            <table className="table">
+              <thead><tr><th>Account</th><th>AWS account ID</th><th>Method</th><th>IAM role ARN</th><th>Regions</th><th>Status</th><th>Last validated</th><th style={{ textAlign: "right" }}>Actions</th></tr></thead>
+              <tbody>
+                {list.data.map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ fontWeight: 500, whiteSpace: "nowrap" }}>{c.name}</td>
+                    <td className="mono small muted">{c.accountId}</td>
+                    <td className="small muted" style={{ whiteSpace: "nowrap" }}>IAM cross-account role</td>
+                    <td className="mono xs muted ellipsis" style={{ maxWidth: 220 }} title={c.roleArn}>{c.roleArn}</td>
+                    <td className="mono xs muted" style={{ whiteSpace: "nowrap" }}><span style={{ color: "var(--foreground)" }}>{c.defaultRegion}</span>{c.allowedRegions.length > 1 && ` +${c.allowedRegions.length - 1}`}</td>
+                    <td><span title={c.statusMessage}><ConnectionStatusBadge status={c.status} /></span></td>
+                    <td className="mono xs muted" style={{ whiteSpace: "nowrap" }}>{c.lastValidatedAt ? relativeTime(c.lastValidatedAt) : "never"}</td>
+                    <td>
+                      <div className="row" style={{ justifyContent: "flex-end" }}>
+                        <Button size="sm" onClick={() => validate(c)} disabled={validating === c.id}>
+                          {validating === c.id ? <span className="spinner" /> : <RefreshCw size={12} />} Re-validate
+                        </Button>
+                        <Button size="sm" variant="ghost" className="btn-danger" onClick={() => remove(c)} aria-label={`Remove ${c.name}`}><Trash2 size={13} /></Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
+      <DemoNote>In local development, validation is simulated. No IAM roles, trust policies or STS calls are touched.</DemoNote>
 
       {adding && (
         <AddConnectionModal
@@ -122,24 +138,24 @@ export function AddConnectionModal({ onClose, onCreated }: { onClose: () => void
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Add AWS connection">
       <Card className="modal" title="Add AWS connection" actions={<Button variant="ghost" size="sm" onClick={onClose} aria-label="Close"><X size={14} /></Button>}>
         <form className="stack-lg" onSubmit={submit} noValidate>
-          <Field label="Name" htmlFor="c-name" hint={errors.name}>
+          <Field label="Name" htmlFor="c-name" error={errors.name}>
             <input id="c-name" className="input" value={draft.name} onChange={(e) => set("name", e.target.value)} placeholder="Production" />
           </Field>
-          <Field label="AWS account ID" htmlFor="c-acct" hint={errors.accountId}>
+          <Field label="AWS account ID" htmlFor="c-acct" error={errors.accountId}>
             <input id="c-acct" className="input mono" inputMode="numeric" value={draft.accountId} onChange={(e) => set("accountId", e.target.value.trim())} placeholder="123456789012" />
           </Field>
-          <Field label="Read-only IAM role ARN" htmlFor="c-role" hint={errors.roleArn ?? "Provided by your infrastructure engineer."}>
+          <Field label="Read-only IAM role ARN" htmlFor="c-role" error={errors.roleArn} hint="Provided by your infrastructure engineer.">
             <input id="c-role" className="input mono" value={draft.roleArn} onChange={(e) => set("roleArn", e.target.value)} placeholder="arn:aws:iam::123456789012:role/CloudSageReadOnly" />
           </Field>
-          <Field label="External ID (optional)" htmlFor="c-ext" hint={errors.externalId}>
+          <Field label="External ID (optional)" htmlFor="c-ext" error={errors.externalId}>
             <input id="c-ext" className="input mono" value={draft.externalId} onChange={(e) => set("externalId", e.target.value)} />
           </Field>
-          <Field label="Allowed regions" hint={errors.allowedRegions ?? "Investigations can only run in these regions."}>
+          <Field label="Allowed regions" error={errors.allowedRegions} hint="Investigations can only run in these regions.">
             <div className="chips">
               {AWS_REGIONS.map((r) => {
                 const on = draft.allowedRegions.includes(r);
                 return (
-                  <button key={r} type="button" className="chip" aria-pressed={on} style={on ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                  <button key={r} type="button" className="chip" aria-pressed={on} style={on ? { borderColor: "var(--primary)", color: "var(--primary)" } : undefined}
                     onClick={() => set("allowedRegions", on ? draft.allowedRegions.filter((x) => x !== r) : [...draft.allowedRegions, r])}>
                     {on && <CheckCircle2 size={12} style={{ marginRight: 4, verticalAlign: -2 }} />}{r}
                   </button>
@@ -147,7 +163,7 @@ export function AddConnectionModal({ onClose, onCreated }: { onClose: () => void
               })}
             </div>
           </Field>
-          <Field label="Default region" htmlFor="c-def" hint={errors.defaultRegion}>
+          <Field label="Default region" htmlFor="c-def" error={errors.defaultRegion}>
             <select id="c-def" className="select" value={draft.defaultRegion} onChange={(e) => set("defaultRegion", e.target.value)}>
               {AWS_REGIONS.map((r) => <option key={r}>{r}</option>)}
             </select>

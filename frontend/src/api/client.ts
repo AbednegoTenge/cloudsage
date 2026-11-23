@@ -4,6 +4,7 @@ import type {
   AwsConnection,
   CreateInvestigationRequest,
   DashboardSummary,
+  DiscoveredResource,
   Investigation,
   InvestigationDetail,
   InvestigationEvent,
@@ -26,6 +27,8 @@ export interface CloudSageApi {
   createInvestigation(req: CreateInvestigationRequest): Promise<Investigation>;
   /** Live progress (SSE in the real API). Replays past events, then streams new ones. */
   streamInvestigationEvents(id: string, onEvent: (e: InvestigationEvent) => void): Unsubscribe;
+  /** Resource discovery within the selected account and region(s). */
+  listResources(filter?: { connectionId?: string; service?: string }): Promise<DiscoveredResource[]>;
   listConnections(): Promise<AwsConnection[]>;
   createConnection(input: Omit<AwsConnection, "id" | "status" | "lastValidatedAt">): Promise<AwsConnection>;
   validateConnection(id: string): Promise<AwsConnection>;
@@ -68,6 +71,12 @@ function createHttpApi(baseUrl: string): CloudSageApi {
       const es = new EventSource(`${baseUrl}/investigations/${encodeURIComponent(id)}/stream`, { withCredentials: true });
       es.onmessage = (m) => onEvent(JSON.parse(m.data) as InvestigationEvent);
       return () => es.close();
+    },
+    listResources: (f) => {
+      const p = new URLSearchParams();
+      if (f?.connectionId) p.set("connection_id", f.connectionId);
+      if (f?.service) p.set("service", f.service);
+      return req(`/resources${p.toString() ? `?${p}` : ""}`);
     },
     listConnections: () => req("/connections"),
     createConnection: (body) => req("/connections", { method: "POST", body: JSON.stringify(body) }),

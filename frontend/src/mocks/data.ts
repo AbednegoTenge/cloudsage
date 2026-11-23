@@ -3,6 +3,7 @@
 import type {
   AwsConnection,
   DashboardSummary,
+  DiscoveredResource,
   Investigation,
   InvestigationDetail,
   InvestigationEvent,
@@ -54,6 +55,7 @@ export const mockConnections: AwsConnection[] = [
 export const mockInvestigations: Investigation[] = [
   {
     id: "inv-1042",
+    summary: "Root volume filled to 100%, pinning CPU and failing the reachability check. System host check is healthy.",
     title: "EC2 instance i-0a1b2c3d4e5f67890 failing status checks",
     prompt: "Investigate why EC2 instance i-0a1b2c3d4e5f67890 is unhealthy.",
     connectionId: "conn-prod",
@@ -73,6 +75,7 @@ export const mockInvestigations: Investigation[] = [
   },
   {
     id: "inv-1041",
+    summary: "2 of 46 instances flagged: api-worker-3 failing reachability, batch-runner-1 with elevated CPU credit usage.",
     title: "Discover unhealthy EC2 instances in production",
     prompt: "Find unhealthy EC2 instances in my AWS account.",
     connectionId: "conn-prod",
@@ -93,6 +96,7 @@ export const mockInvestigations: Investigation[] = [
   },
   {
     id: "inv-1040",
+    summary: "Collecting service events and task stop reasons for the in-progress deployment.",
     title: "ECS service payments-api stuck in deployment",
     prompt: "Why is the payments-api ECS service not finishing its deployment?",
     connectionId: "conn-prod",
@@ -111,6 +115,7 @@ export const mockInvestigations: Investigation[] = [
   },
   {
     id: "inv-1039",
+    summary: "Errors rose from ~2 to ~40 per 5 min after a configuration change at 07:50 UTC; duration also increased.",
     title: "Lambda order-processor error rate spike",
     prompt: "The order-processor Lambda started throwing errors this morning. What changed?",
     connectionId: "conn-prod",
@@ -130,6 +135,7 @@ export const mockInvestigations: Investigation[] = [
   },
   {
     id: "inv-1038",
+    summary: "Investigation failed: CloudSage could not assume the role for this account. Re-validate the IAM trust policy.",
     title: "RDS orders-db high CPU",
     prompt: "Check why the orders-db RDS instance has high CPU.",
     connectionId: "conn-sandbox",
@@ -146,6 +152,7 @@ export const mockInvestigations: Investigation[] = [
   },
   {
     id: "inv-1037",
+    summary: "stg-catalog free storage fell below 12% after a bulk import; no other staging database is near its limit.",
     title: "Staging RDS storage nearing limit",
     prompt: "Are any staging databases running low on storage?",
     connectionId: "conn-staging",
@@ -295,11 +302,15 @@ const ec2Report: InvestigationReport = {
   ],
   hypotheses: [
     {
+      title: "Root volume exhausted by spool files and logs",
+      score: 0.86,
       statement: "Root volume exhaustion (spool files and unrotated logs) caused the retry loop and CPU saturation, making the guest OS unresponsive to reachability probes.",
       confidence: "high",
       supportingObservations: [0, 1, 2, 3],
     },
     {
+      title: "Log rotation undersized for current traffic",
+      score: 0.62,
       statement: "Log rotation failed once the disk filled, accelerating the problem; it may have been undersized for current traffic before today.",
       confidence: "medium",
       supportingObservations: [1, 3],
@@ -399,7 +410,7 @@ function genericDetail(inv: Investigation): InvestigationDetail {
             series("Errors (Sum)", "count", tools[1]?.id ?? "", (i) => (i > 50 ? 40 + jitter(i, 10) : 2 + Math.abs(jitter(i, 1.5))), { endMinsAgo: 140 }),
           ],
           logExcerpts: [],
-          hypotheses: [{ statement: "A configuration change near the start of the error spike is the most likely trigger.", confidence: "medium", supportingObservations: [0] }],
+          hypotheses: [{ title: "Recent configuration change", score: 0.64, statement: "A configuration change near the start of the error spike is the most likely trigger.", confidence: "medium", supportingObservations: [0] }],
           recommendations: [{ title: "Review recent deployments", detail: "Compare the current configuration with the previous version.", priority: "now" }],
           confidence: "medium",
           limitations: ["Mock report generated for local development."],
@@ -439,7 +450,28 @@ export const mockDashboard: DashboardSummary = {
     { day: "Nov 22", count: 2 },
     { day: "Nov 23", count: 10 },
   ],
+  healthTimeline: Array.from({ length: 13 }, (_, i) => ({
+    t: iso(18 + (12 - i) * 5),
+    healthy: Math.round(88 - Math.sin(i / 2) * 2 - (i > 8 ? 1 : 0)),
+    unhealthy: Math.round(2 + (i > 6 ? 2 : 0) + Math.abs(Math.cos(i / 3))),
+  })),
 };
+
+export const mockResources: DiscoveredResource[] = [
+  { service: "ec2", resourceType: "instance", identifier: "i-0a1b2c3d4e5f67890", name: "api-worker-3", region: "us-east-1", health: "unhealthy", observedAt: iso(16) },
+  { service: "ec2", resourceType: "instance", identifier: "i-0fedcba9876543210", name: "batch-runner-1", region: "us-east-1", health: "degraded", observedAt: iso(24) },
+  { service: "ec2", resourceType: "instance", identifier: "i-0123456789abcdef0", name: "api-worker-1", region: "us-east-1", health: "healthy", observedAt: iso(22) },
+  { service: "ec2", resourceType: "instance", identifier: "i-0abcdef1234567890", name: "api-worker-2", region: "us-east-1", health: "healthy", observedAt: iso(22) },
+  { service: "ec2", resourceType: "instance", identifier: "i-09a8b7c6d5e4f3210", name: "bastion", region: "us-west-2", health: "healthy", observedAt: iso(40) },
+  { service: "ecs", resourceType: "service", identifier: "arn:aws:ecs:us-east-1:111122223333:service/prod-core/payments-api", name: "payments-api", region: "us-east-1", health: "degraded", observedAt: iso(2) },
+  { service: "ecs", resourceType: "service", identifier: "arn:aws:ecs:us-east-1:111122223333:service/prod-core/checkout", name: "checkout", region: "us-east-1", health: "healthy", observedAt: iso(12) },
+  { service: "ecs", resourceType: "service", identifier: "arn:aws:ecs:eu-west-1:111122223333:service/prod-eu/auth-service", name: "auth-service", region: "eu-west-1", health: "healthy", observedAt: iso(30) },
+  { service: "rds", resourceType: "db-instance", identifier: "orders-db", name: "orders-db", region: "us-east-1", health: "healthy", observedAt: iso(35) },
+  { service: "rds", resourceType: "db-instance", identifier: "reporting-replica", name: "reporting-replica", region: "us-east-1", health: "degraded", observedAt: iso(50) },
+  { service: "lambda", resourceType: "function", identifier: "order-processor", name: "order-processor", region: "us-west-2", health: "degraded", observedAt: iso(137) },
+  { service: "lambda", resourceType: "function", identifier: "invoice-renderer", name: "invoice-renderer", region: "us-east-1", health: "healthy", observedAt: iso(60) },
+  { service: "lambda", resourceType: "function", identifier: "audit-event-archiver", name: "audit-event-archiver", region: "us-east-1", health: "healthy", observedAt: iso(75) },
+];
 
 export const mockSettings: UserSettings = {
   displayName: "Cloud Engineer",
@@ -449,4 +481,12 @@ export const mockSettings: UserSettings = {
   showRawEvidenceByDefault: false,
   maxToolCalls: 25,
   investigationTimeoutSec: 300,
+  defaultRegion: "us-east-1",
+  investigationDepth: "balanced",
+  autoOpenReport: false,
+  includeLogs: true,
+  includeDeployments: true,
+  notifyOnFailed: true,
+  notifyOnCompleted: false,
+  weeklyDigest: true,
 };

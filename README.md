@@ -15,7 +15,7 @@ networking, hosting, CI/CD) is owned by the infrastructure engineer and is out o
 
 | Phase | Scope | State |
 |---|---|---|
-| 1 | Application foundation and UI | **Done** (UI runs on mock data) |
+| 1 | Application foundation and UI | **Done** (7 pages on mock data: Overview, AI Assistant, Investigations, Investigation report, Infrastructure, AWS Connections, Settings) |
 | 2 | Backend API and PostgreSQL | Next |
 | 3 | Amazon Bedrock integration | Planned |
 | 4 | EC2 and CloudWatch tools | Planned |
