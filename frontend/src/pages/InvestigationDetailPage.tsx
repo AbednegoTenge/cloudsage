@@ -1,7 +1,7 @@
 import { ArrowLeft, Clock, Copy, Download, FileText, Lightbulb, ShieldAlert, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, usingMockApi } from "../api/client";
 import { InvestigationStatusBadge, SERVICE_LABEL } from "../components/domain";
 import { AffectedResources, Findings, Limitations, LogEvidence, MetricEvidence, Timeline, ToolExecutions } from "../components/report";
 import { Button, Card, DemoNote, ErrorCallout, Spinner } from "../components/ui";
@@ -103,7 +103,7 @@ export function InvestigationDetailPage() {
 
       <ToolExecutions tools={d.toolExecutions} focus={focusEvidence} />
       {r && <Limitations report={r} />}
-      <DemoNote>Sample data for local development. Treat AI-generated root causes and recommendations as hypotheses to validate against your environment.</DemoNote>
+      <DemoNote>{usingMockApi ? "Sample data for local development. " : ""}Treat AI-generated root causes and recommendations as hypotheses to validate against your environment.</DemoNote>
     </div>
   );
 }

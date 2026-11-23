@@ -1,1 +1,1 @@
-"""Data access layer; every query is scoped by user_id. Implemented in Phase 2."""
+"""Data access layer. Every query on user-owned data is scoped by ``user_id``."""

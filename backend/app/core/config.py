@@ -9,7 +9,7 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -43,8 +43,15 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://localhost:5173"]
     )
 
-    # Database (Phase 2)
+    # Database
     database_url: str = "postgresql+psycopg://cloudsage:cloudsage@localhost:5432/cloudsage"
+    database_echo: bool = False
+    database_pool_size: int = Field(default=5, ge=1, le=50)
+
+    # Authentication. "dev" trusts an X-CloudSage-User header (local development and tests
+    # only); OIDC bearer-token validation arrives with security hardening (Phase 7).
+    auth_mode: str = Field(default="dev", pattern="^(dev|oidc)$")
+    dev_default_user_email: str = "engineer@example.com"
 
     # AWS (Phase 4). No credentials here: live mode assumes a role ARN stored per connection.
     aws_mode: AwsMode = AwsMode.MOCK
@@ -58,6 +65,13 @@ class Settings(BaseSettings):
     investigation_timeout_seconds: int = Field(default=300, ge=10, le=3600)
     investigation_max_tool_calls: int = Field(default=25, ge=1, le=200)
     investigation_max_time_range_hours: int = Field(default=168, ge=1, le=24 * 31)
+    sse_poll_interval_seconds: float = Field(default=1.0, gt=0, le=10)
+
+    @model_validator(mode="after")
+    def _forbid_dev_auth_in_production(self) -> "Settings":
+        if self.environment is Environment.PRODUCTION and self.auth_mode == "dev":
+            raise ValueError("CLOUDSAGE_AUTH_MODE=dev is not allowed in production")
+        return self
 
     @field_validator("cors_origins", mode="before")
     @classmethod
