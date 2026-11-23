@@ -393,7 +393,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
-    { name = "moto", extras = ["sts"], specifier = ">=5.0" },
+    { name = "moto", extras = ["sts", "ec2", "cloudwatch", "logs"], specifier = ">=5.0" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "ruff", specifier = ">=0.5" },

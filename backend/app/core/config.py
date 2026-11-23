@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     investigation_max_tool_calls: int = Field(default=25, ge=1, le=200)
     investigation_max_time_range_hours: int = Field(default=168, ge=1, le=24 * 31)
     sse_poll_interval_seconds: float = Field(default=1.0, gt=0, le=10)
+    tool_timeout_seconds: int = Field(default=30, ge=5, le=300)
+    tool_max_output_chars: int = Field(default=200_000, ge=10_000, le=2_000_000)
 
     @model_validator(mode="after")
     def _forbid_dev_auth_in_production(self) -> "Settings":

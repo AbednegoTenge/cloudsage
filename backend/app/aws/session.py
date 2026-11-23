@@ -1,10 +1,12 @@
 """AWS access via STS AssumeRole. Only temporary credentials are ever used or held.
 
-Phase 2 uses this to validate connections; Phase 4 builds tool sessions on top of it.
+Credentials live in memory for the duration of one validation, discovery or investigation and
+are never written to the database, logs or reports.
 """
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 import boto3
 from botocore.config import Config
@@ -13,8 +15,11 @@ from botocore.exceptions import BotoCoreError, ClientError
 from app.core.config import AwsMode, Settings
 from app.core.logging import redact
 
-_BOTO_CONFIG = Config(
-    connect_timeout=5, read_timeout=10, retries={"max_attempts": 2, "mode": "standard"}
+BOTO_CONFIG = Config(
+    connect_timeout=5,
+    read_timeout=15,
+    retries={"max_attempts": 3, "mode": "standard"},
+    user_agent_extra="cloudsage",
 )
 
 
@@ -24,35 +29,64 @@ class ValidationResult:
     message: str | None = None
 
 
-def _assume_and_verify(
-    role_arn: str, external_id: str | None, account_id: str, region: str, duration: int
-) -> ValidationResult:
-    sts = boto3.client("sts", region_name=region, config=_BOTO_CONFIG)
-    params: dict = {
+class AssumeRoleError(RuntimeError):
+    """STS refused or could not be reached. The message is redacted and safe to show."""
+
+
+def client_error_message(e: Exception) -> str:
+    if isinstance(e, ClientError):
+        err = e.response.get("Error", {})
+        return redact(f"{err.get('Code', 'Error')}: {err.get('Message', 'request failed')}")[:500]
+    if isinstance(e, BotoCoreError):
+        return f"Could not reach AWS: {e.__class__.__name__}"
+    return redact(str(e))[:500]
+
+
+def assume_role_session(
+    *,
+    role_arn: str,
+    external_id: str | None,
+    region: str,
+    duration: int,
+    session_name: str = "cloudsage",
+) -> boto3.Session:
+    """Assume the connection's role and return a boto3 session holding only temporary creds."""
+    sts = boto3.client("sts", region_name=region, config=BOTO_CONFIG)
+    params: dict[str, Any] = {
         "RoleArn": role_arn,
-        "RoleSessionName": "cloudsage-validate",
+        "RoleSessionName": session_name[:64],
         "DurationSeconds": duration,
     }
     if external_id:
         params["ExternalId"] = external_id
     try:
         creds = sts.assume_role(**params)["Credentials"]
-        scoped = boto3.client(
-            "sts",
-            region_name=region,
-            config=_BOTO_CONFIG,
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
+    except (ClientError, BotoCoreError) as e:
+        raise AssumeRoleError(client_error_message(e)) from None
+    return boto3.Session(
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=region,
+    )
+
+
+def _assume_and_verify(
+    role_arn: str, external_id: str | None, account_id: str, region: str, duration: int
+) -> ValidationResult:
+    try:
+        session = assume_role_session(
+            role_arn=role_arn,
+            external_id=external_id,
+            region=region,
+            duration=duration,
+            session_name="cloudsage-validate",
         )
-        identity = scoped.get_caller_identity()
-    except ClientError as e:
-        err = e.response.get("Error", {})
-        return ValidationResult(
-            False, redact(f"{err.get('Code', 'Error')}: {err.get('Message', 'AssumeRole failed')}")
-        )
-    except BotoCoreError as e:
-        return ValidationResult(False, redact(f"Could not reach AWS STS: {e.__class__.__name__}"))
+        identity = session.client("sts", config=BOTO_CONFIG).get_caller_identity()
+    except AssumeRoleError as e:
+        return ValidationResult(False, str(e))
+    except (ClientError, BotoCoreError) as e:
+        return ValidationResult(False, client_error_message(e))
     if identity.get("Account") != account_id:
         return ValidationResult(
             False, "Assumed role belongs to a different account than configured"

@@ -3,9 +3,12 @@
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 
+from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.aws.discovery import LIVE_SERVICES, discover_ec2
 from app.aws.mock import mock_resources
+from app.aws.session import AssumeRoleError, client_error_message
 from app.core.config import AwsMode, Settings
 from app.models import InvestigationStatus, User
 from app.repositories.connections import ConnectionRepository
@@ -22,6 +25,10 @@ class NotImplementedYet(ServiceError):
     status_code = 501
 
 
+class UpstreamError(ServiceError):
+    status_code = 502
+
+
 async def discover_resources(
     db: AsyncSession, user: User, settings: Settings, connection_id: str | None, service: str | None
 ) -> list[DiscoveredResource]:
@@ -33,11 +40,24 @@ async def discover_resources(
         conns = [conn]
     else:
         conns = await repo.list()
-    if settings.aws_mode is not AwsMode.MOCK:
-        raise NotImplementedYet("Live resource discovery arrives with the AWS tools (Phase 4)")
     out: list[DiscoveredResource] = []
-    for c in conns:
-        out.extend(mock_resources(c.account_id, list(c.allowed_regions), service))
+    if settings.aws_mode is AwsMode.MOCK:
+        for c in conns:
+            out.extend(mock_resources(c.account_id, list(c.allowed_regions), service))
+    else:
+        if service and service not in LIVE_SERVICES:
+            raise NotImplementedYet(
+                f"Live {service} discovery arrives with the {service} tools (Phase 6)"
+            )
+        for c in conns:
+            try:
+                out.extend(await discover_ec2(settings, c))
+            except AssumeRoleError as e:
+                raise UpstreamError(f"Could not access connection '{c.name}': {e}") from None
+            except (ClientError, BotoCoreError) as e:
+                raise UpstreamError(
+                    f"Discovery failed for connection '{c.name}': {client_error_message(e)}"
+                ) from None
     order = {"unhealthy": 0, "degraded": 1, "unknown": 2, "healthy": 3}
     return sorted(out, key=lambda r: (order[r.health], r.name))
 
@@ -54,9 +74,12 @@ async def dashboard(db: AsyncSession, user: User, settings: Settings) -> Dashboa
     per_day = Counter(i.created_at.astimezone(UTC).date() for i in invs)
     days = [(now - timedelta(days=d)).date() for d in range(6, -1, -1)]
 
-    resources: list[DiscoveredResource] = []
-    if settings.aws_mode is AwsMode.MOCK:
+    try:
         resources = await discover_resources(db, user, settings, None, None)
+    except ServiceError:
+        # The dashboard stays available when an account can't be reached; the Infrastructure
+        # page shows the error.
+        resources = []
     by_svc = {s: Counter(r.health for r in resources if r.service == s) for s in SERVICES}
     unhealthy_now = sum(c["unhealthy"] + c["degraded"] for c in by_svc.values())
     healthy_now = sum(c["healthy"] for c in by_svc.values())
