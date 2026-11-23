@@ -6,8 +6,10 @@ For each call the runner:
 2. validates the input against the tool's schema (unknown fields rejected);
 3. runs the tool in a worker thread with a timeout, inside the scoped ``AwsContext``;
 4. redacts secrets and caps the size of the output;
-5. writes a ``ToolExecution`` row (input, output or error, status, duration) plus timeline
-   events. Rows are never edited afterwards.
+5. writes a ``ToolExecution`` row when the call starts (status ``running``, with a
+   ``tool_started`` event) and completes it exactly once with the output or error, status and
+   duration (with a ``tool_completed`` or ``tool_failed`` event). Rows are never edited after
+   that.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -69,8 +72,10 @@ class ToolRunner:
         settings: Settings,
         *,
         max_calls: int | None = None,
+        on_progress: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.db, self.repo, self.inv, self.ctx, self.settings = db, repo, inv, ctx, settings
+        self.on_progress = on_progress
         self.max_calls = max_calls or settings.investigation_max_tool_calls
         self.calls = 0
 
@@ -78,18 +83,18 @@ class ToolRunner:
         if self.calls >= self.max_calls:
             raise ToolLimitReached(f"Tool call limit of {self.max_calls} reached")
         self.calls += 1
-        raw_input = raw_input or {}
-        safe_input = redact_json(raw_input, 4000)
+        raw_input = raw_input if isinstance(raw_input, dict) else {}
         try:
             spec = get_tool(tool_name)
-            service = spec.service
         except ToolError as e:
-            return await self._record(tool_name, "unknown", safe_input, None, str(e), 0)
+            row = await self._start(tool_name, "unknown", redact_json(raw_input, 4000))
+            return await self._finish(row, None, str(e), 0)
 
         started = time.monotonic()
+        row = await self._start(spec.name, spec.service, redact_json(raw_input, 4000))
         try:
             inp = spec.input_model.model_validate(raw_input)
-            safe_input = redact_json(inp.model_dump(mode="json", exclude_none=True), 4000)
+            row.input = redact_json(inp.model_dump(mode="json", exclude_none=True), 4000)
             output = await asyncio.wait_for(
                 asyncio.to_thread(spec.run, self.ctx, inp),
                 timeout=self.settings.tool_timeout_seconds,
@@ -107,40 +112,50 @@ class ToolRunner:
         else:
             ms = int((time.monotonic() - started) * 1000)
             out = redact_json(output, self.settings.tool_max_output_chars)
-            return await self._record(spec.name, service, safe_input, out, None, ms)
+            return await self._finish(row, out, None, ms)
         ms = int((time.monotonic() - started) * 1000)
-        return await self._record(spec.name, service, safe_input, None, error, ms)
+        return await self._finish(row, None, error, ms)
 
-    async def _record(
-        self,
-        name: str,
-        service: str,
-        inp: Any,
-        output: Any,
-        error: str | None,
-        duration_ms: int,
-    ) -> ToolResult:
+    async def _start(self, name: str, service: str, inp: dict[str, Any]) -> ToolExecution:
         row = ToolExecution(
             investigation_id=self.inv.id,
             tool_name=name[:100],
             service=service[:32],
-            input=inp if isinstance(inp, dict) else {"value": inp},
-            output=output,
-            status=ToolExecutionStatus.FAILED if error else ToolExecutionStatus.SUCCEEDED,
-            error=error,
-            duration_ms=duration_ms,
+            input=inp,
+            status=ToolExecutionStatus.RUNNING,
         )
         self.db.add(row)
         await self.db.flush()
+        await self.repo.add_event(
+            self.inv, "tool_started", f"Running {name}"[:200], tool_execution=row
+        )
+        if self.on_progress:
+            await self.on_progress()
+        return row
+
+    async def _finish(
+        self, row: ToolExecution, output: Any, error: str | None, duration_ms: int
+    ) -> ToolResult:
+        """Record the outcome. This is the only update a ToolExecution row ever receives."""
+        row.output = output
+        row.error = error
+        row.duration_ms = duration_ms
+        row.status = ToolExecutionStatus.FAILED if error else ToolExecutionStatus.SUCCEEDED
+        await self.db.flush()
         if error:
             await self.repo.add_event(
-                self.inv, "tool_failed", f"{name} failed: {error}"[:500], tool_execution=row
+                self.inv,
+                "tool_failed",
+                f"{row.tool_name} failed: {error}"[:500],
+                tool_execution=row,
             )
         else:
             await self.repo.add_event(
                 self.inv,
                 "tool_completed",
-                f"{name} completed in {duration_ms} ms",
+                f"{row.tool_name} completed in {duration_ms} ms",
                 tool_execution=row,
             )
-        return ToolResult(str(row.id), name, error is None, output, error)
+        if self.on_progress:
+            await self.on_progress()
+        return ToolResult(str(row.id), row.tool_name, error is None, output, error)

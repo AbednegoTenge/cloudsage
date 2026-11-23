@@ -24,7 +24,7 @@ TABLES = (
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None, environment=Environment.TEST)
+    return Settings(_env_file=None, environment=Environment.TEST, investigation_autostart=False)
 
 
 @pytest.fixture
@@ -68,6 +68,7 @@ def db_settings(migrated_db: str) -> Iterator[Settings]:
         database_url=migrated_db,
         sse_poll_interval_seconds=0.05,
         investigation_timeout_seconds=10,
+        investigation_autostart=False,
     )
 
 
