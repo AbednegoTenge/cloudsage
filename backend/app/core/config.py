@@ -57,9 +57,19 @@ class Settings(BaseSettings):
     aws_mode: AwsMode = AwsMode.MOCK
     aws_sts_session_duration_seconds: int = Field(default=900, ge=900, le=3600)
 
-    # Amazon Bedrock (Phase 3). Model ID and region must be supplied by the environment.
+    # Amazon Bedrock. Model ID and region must be supplied by the environment; credentials come
+    # from the standard AWS chain (e.g. the service's IAM role), never from this config.
     bedrock_model_id: str | None = None
     bedrock_region: str | None = None
+    bedrock_max_tokens: int = Field(default=4096, ge=256, le=32768)
+    bedrock_temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    bedrock_timeout_seconds: int = Field(default=60, ge=5, le=600)
+    # Optional Amazon Bedrock Guardrail applied to every model call.
+    bedrock_guardrail_id: str | None = None
+    bedrock_guardrail_version: str | None = None
+
+    # Limits on what the model sees per piece of evidence (characters after redaction).
+    agent_max_evidence_chars: int = Field(default=12000, ge=500, le=200000)
 
     # Investigation limits
     investigation_timeout_seconds: int = Field(default=300, ge=10, le=3600)
@@ -72,6 +82,18 @@ class Settings(BaseSettings):
         if self.environment is Environment.PRODUCTION and self.auth_mode == "dev":
             raise ValueError("CLOUDSAGE_AUTH_MODE=dev is not allowed in production")
         return self
+
+    @model_validator(mode="after")
+    def _guardrail_pairing(self) -> "Settings":
+        if bool(self.bedrock_guardrail_id) != bool(self.bedrock_guardrail_version):
+            raise ValueError(
+                "CLOUDSAGE_BEDROCK_GUARDRAIL_ID and CLOUDSAGE_BEDROCK_GUARDRAIL_VERSION go together"
+            )
+        return self
+
+    @property
+    def bedrock_configured(self) -> bool:
+        return bool(self.bedrock_model_id and self.bedrock_region)
 
     @field_validator("cors_origins", mode="before")
     @classmethod

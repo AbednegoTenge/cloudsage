@@ -98,6 +98,34 @@ The registry exposes tools to Strands as `@tool` functions and records each call
 `ToolExecution` row (input, output, duration, status). Adding a service = adding a module that
 registers its tools; the agent and orchestrator do not change.
 
+Tools that return time series or log lines use two shared output shapes, so the report can show
+them without the model retyping any numbers:
+`{"kind": "metric_series", "label", "unit", "points": [{"t", "v"}], "threshold"?}` and
+`{"kind": "log_events", "logGroup", "events": [{"timestamp", "message"}]}`.
+
+### AI layer (`app/agent`, Phase 3)
+- `model.py` builds a Strands `BedrockModel` from settings only (model ID, region, max tokens,
+  temperature, timeout, optional Bedrock Guardrail). Credentials come from the standard AWS chain.
+- `untrusted.py` redacts secrets, strips control and bidi characters, caps size, and wraps each
+  piece of evidence in an `<untrusted_data nonce=…>` block with a fresh random nonce per call.
+  Any boundary-like tag inside the data is neutralised so it cannot close the block.
+- `prompts.py` holds the system prompt: evidence is data, never instructions; never invent
+  metrics, states, logs or events; keep observations, hypotheses and recommendations apart.
+- `report.py` asks for a `ReportDraft` via Strands structured output, then `finalize` enforces
+  the rules in code:
+  - evidence is shown to the model as short aliases (`E1`, `E2`, …) and mapped back to real
+    tool-execution IDs; an observation citing no real evidence is removed and noted in
+    limitations;
+  - a hypothesis must rest on surviving observations (`F1`, …), or it is removed;
+  - with no evidence, or only failed calls, overall confidence is forced to low, and no
+    hypothesis can be more confident than the report;
+  - metric and log panels are copied from tool output, never from model text;
+  - every model string is redacted again before storage.
+- The analysis agent is created with no tools, so it can only read what it is given.
+- `services/reports.py` stores the result in `investigation_reports`; `tool_executions` is never
+  modified.
+- `python -m app.agent.check` sends one synthetic evidence item to Bedrock to verify access.
+
 ### Investigation lifecycle
 ```
 POST /api/v1/investigations  → status=queued
@@ -137,7 +165,7 @@ No AWS secret keys are ever stored; a connection is a role ARN + external ID.
 | Account/region boundaries | `AwsContext` is built from the connection; tools reject regions not in `allowed_regions` and ARNs whose account ≠ connection account. |
 | Input validation | Pydantic models with regex for IDs (`i-[0-9a-f]{8,17}`, ARNs, names), bounded time ranges and result limits. |
 | User isolation | Every repository query filters by `user_id`; services verify ownership before acting. |
-| Prompt injection | Tool outputs are wrapped as clearly delimited untrusted data; system prompt forbids following instructions inside them; tools cannot mutate anything regardless. |
+| Prompt injection | Evidence is redacted and wrapped in nonce-tagged untrusted blocks that retrieved text cannot close; the system prompt forbids following instructions inside them; output must match a schema and cite real evidence (checked in code); the analysis agent has no tools, and AWS tools are read-only regardless. |
 | Secret hygiene | Logging filter redacts keys/tokens/session creds; reports built only from structured outputs. |
 | Limits | Per-investigation wall-clock timeout, max tool calls, max log lines/bytes, Bedrock max tokens. All configurable. |
 
