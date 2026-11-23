@@ -52,7 +52,7 @@ createdb -O cloudsage cloudsage_test
 ```bash
 cd backend
 cp .env.example .env      # CLOUDSAGE_AWS_MODE=mock needs no AWS account
-uv sync
+uv sync                   # or: pip install -r requirements-dev.txt
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload    # http://localhost:8000/docs
 uv run pytest             # integration tests skip if cloudsage_test is unreachable
@@ -63,6 +63,14 @@ To run the UI against the backend, set `VITE_USE_MOCKS=false` in `frontend/.env`
 development the API identifies the caller with an `X-CloudSage-User` email header, falling back to
 `CLOUDSAGE_DEV_DEFAULT_USER_EMAIL`. That dev mode is refused when `CLOUDSAGE_ENVIRONMENT=production`;
 OIDC sign-in arrives with security hardening in Phase 7.
+
+`requirements.txt` (runtime) and `requirements-dev.txt` (runtime plus test tools) are exported
+from `uv.lock` for pip users. After changing dependencies, regenerate them:
+```bash
+uv export --frozen --no-hashes --no-dev --no-emit-project -o requirements.txt
+uv export --frozen --no-hashes --only-group dev --no-emit-project -o requirements-dev.txt
+```
+then put `-r requirements.txt` back at the top of `requirements-dev.txt`.
 
 ### API (v1)
 | Method | Path | Purpose |
