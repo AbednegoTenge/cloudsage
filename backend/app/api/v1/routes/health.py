@@ -20,5 +20,5 @@ def info(settings: SettingsDep) -> AppInfoResponse:
         version=__version__,
         environment=settings.environment.value,
         aws_mode=settings.aws_mode.value,
-        bedrock_configured=bool(settings.bedrock_model_id and settings.bedrock_region),
+        bedrock_configured=settings.bedrock_configured,
     )

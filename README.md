@@ -17,8 +17,8 @@ networking, hosting, CI/CD) is owned by the infrastructure engineer and is out o
 |---|---|---|
 | 1 | Application foundation and UI | **Done** (7 pages on mock data: Overview, AI Assistant, Investigations, Investigation report, Infrastructure, AWS Connections, Settings) |
 | 2 | Backend API and PostgreSQL | **Done** (models, migrations, versioned REST API, SSE, per-user isolation; UI wired to the API) |
-| 3 | Amazon Bedrock integration | Next |
-| 4 | EC2 and CloudWatch tools | Planned |
+| 3 | Amazon Bedrock integration | **Done** (Strands + Bedrock model from settings, injection-resistant evidence handling, evidence-cited report synthesis) |
+| 4 | EC2 and CloudWatch tools | Next |
 | 5 | Agent orchestration, multi-step investigations, SSE | Planned |
 | 6 | ECS, RDS, Lambda | Planned |
 | 7 | History/reports on real data, security hardening | Planned |
@@ -78,7 +78,13 @@ OIDC sign-in arrives with security hardening in Phase 7.
 | GET | `/api/v1/dashboard` | Overview aggregates |
 | GET / PUT | `/api/v1/settings` | Per-user preferences |
 
-Investigations stay `queued` until the agent arrives (Phases 3 to 5). Live resource discovery
+Investigations stay `queued` until the agent runs them (Phase 5).
+
+### Amazon Bedrock
+Set `CLOUDSAGE_BEDROCK_MODEL_ID` and `CLOUDSAGE_BEDROCK_REGION`, make AWS credentials available
+through the usual chain (for example `aws sso login` locally, an IAM role when deployed), then
+check access with `uv run python -m app.agent.check`. Tests never call Bedrock; they use a scripted
+stand-in model. Live resource discovery
 returns 501 until the AWS tools land in Phase 4; mock mode serves sample resources.
 
 All configuration comes from environment variables (see each `.env.example`). No AWS credentials,
