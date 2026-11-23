@@ -2,7 +2,7 @@ import { FileSearch, History, Sparkles } from "lucide-react";
 import { Search } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { api, usingMockApi } from "../api/client";
 import { InvestigationStatusBadge, SERVICE_LABEL, ServiceTag } from "../components/domain";
 import { Button, Card, DemoNote, EmptyState, ErrorCallout, PageHeader, Spinner } from "../components/ui";
 import { useScope } from "../context/ScopeContext";
@@ -56,7 +56,7 @@ export function InvestigationsPage() {
       />
       <Card
         title={<h2 className="card-title"><History size={15} />Investigations</h2>}
-        actions={<span className="xs faint mono">sample data · not live AWS</span>}
+        actions={usingMockApi ? <span className="xs faint mono">sample data · not live AWS</span> : undefined}
       >
         <div className="stack-lg">
           <div className="row wrap between">
@@ -118,7 +118,9 @@ export function InvestigationsPage() {
           )}
         </div>
       </Card>
-      <DemoNote>All investigations shown are sample records. Open any investigation to see its full report, evidence and tool executions.</DemoNote>
+      {usingMockApi && (
+        <DemoNote>All investigations shown are sample records. Open any investigation to see its full report, evidence and tool executions.</DemoNote>
+      )}
     </div>
   );
 }

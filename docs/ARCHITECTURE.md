@@ -117,12 +117,12 @@ Raw evidence (`ToolExecution.output`) is stored **separately** from the AI-gener
 
 | Table | Key columns | Relations |
 |---|---|---|
-| `users` | id, email, display_name, created_at | 1–N connections, investigations |
-| `aws_connections` | id, user_id, name, account_id, role_arn, external_id, default_region, allowed_regions[], status, last_validated_at | N–1 user |
-| `investigations` | id, user_id, connection_id, prompt, region, time_range_start/end, status, resource_refs (jsonb), created/completed_at | N–1 user, connection; 1–N events, tool_executions; 1–1 report |
-| `investigation_events` | id, investigation_id, seq, type, payload (jsonb), created_at | N–1 investigation |
+| `users` | id, email, display_name, preferences (jsonb), created_at | 1–N connections, investigations |
+| `aws_connections` | id, user_id, name, account_id, role_arn, external_id, default_region, allowed_regions[], status, status_message, last_validated_at, deleted_at (soft delete) | N–1 user |
+| `investigations` | id, number (public `inv-N`), user_id, connection_id, account_id (copied), title, prompt, region, time_range_start/end, status, identification_mode, services[], resources (jsonb), summary, severity, created/completed_at | N–1 user, connection; 1–N events, tool_executions; 1–1 report |
+| `investigation_events` | id, investigation_id, seq (unique per investigation), type, message, payload (jsonb), tool_execution_id, created_at | N–1 investigation |
 | `tool_executions` | id, investigation_id, tool_name, service, input (jsonb), output (jsonb), status, error, duration_ms | N–1 investigation |
-| `investigation_reports` | id, investigation_id, summary, observations, evidence_refs, root_causes, recommendations, confidence, limitations, model_id | 1–1 investigation |
+| `investigation_reports` | id, investigation_id, summary, observations, metrics, log_excerpts, hypotheses, recommendations, confidence, limitations, model_id | 1–1 investigation |
 
 No AWS secret keys are ever stored; a connection is a role ARN + external ID.
 
@@ -155,12 +155,13 @@ frontend/src/
   components/                # domain components (StatusBadge, EvidencePanel, ReportView ...)
   api/                       # typed API client; mock adapter for Phase 1
   types/                     # shared domain types mirroring backend schemas
-  mocks/                     # mock data used until Phase 2 endpoints exist
+  mocks/                     # mock data for VITE_USE_MOCKS=true (UI without the backend)
 ```
 
-- Data access goes through `api/client.ts`. In Phase 1 it resolves against `mocks/`; in Phase 2
-  it switches to the real REST API with the same function signatures (`VITE_USE_MOCKS`).
-- Live progress uses `EventSource` against the SSE endpoint (Phase 5).
+- Data access goes through `api/client.ts`: the mock adapter (`VITE_USE_MOCKS=true`) or the HTTP
+  adapter for `/api/v1`, with the same function signatures.
+- Live progress uses `EventSource` against the SSE endpoint, which replays past events and resumes
+  from `Last-Event-ID`. The agent that produces events beyond "queued" arrives in Phase 5.
 
 ---
 

@@ -24,7 +24,8 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
     void refreshConnections();
   }, []);
 
-  const connection = connections.find((c) => c.id === connectionId) ?? connections.find((c) => c.status === "connected");
+  const connection = connections.find((c) => c.id === connectionId) ?? connections.find((c) => c.status === "connected") ??
+    connections.find((c) => c.status !== "error");
 
   useEffect(() => {
     if (connection && !connection.allowedRegions.includes(region)) setRegion(connection.defaultRegion);
