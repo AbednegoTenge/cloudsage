@@ -1,19 +1,38 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
+from app.agent.orchestrator import ModelFactory
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.services.errors import ServiceError
+from app.services.worker import InvestigationWorker
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, *, model_factory: ModelFactory | None = None
+) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        worker = None
+        if settings.investigation_autostart:
+            worker = InvestigationWorker(settings, model_factory)
+            await worker.recover()
+        app.state.worker = worker
+        yield
+        if worker:
+            await worker.shutdown()
+
     app = FastAPI(
+        lifespan=lifespan,
         title=f"{settings.app_name} API",
         version=__version__,
         description="AI-powered, read-only AWS cloud operations agent.",

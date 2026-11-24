@@ -26,10 +26,17 @@ StatusFilter = Literal["queued", "running", "completed", "failed", "timed_out"]
 
 @router.post("", response_model=InvestigationOut, status_code=status.HTTP_201_CREATED)
 async def create_investigation(
-    body: InvestigationCreate, db: DbDep, user: UserDep, settings: SettingsDep
+    body: InvestigationCreate, request: Request, db: DbDep, user: UserDep, settings: SettingsDep
 ):
-    """Queue an investigation bound to one connection (account) and one allowed region."""
-    return investigation_out(await InvestigationService(db, user, settings).create(body))
+    """Queue an investigation bound to one connection (account) and one allowed region, and
+    start it in the background. Follow progress on ``/{id}/stream``."""
+    inv = await InvestigationService(db, user, settings).create(body)
+    out = investigation_out(inv)
+    await db.commit()  # the worker reads it from its own session
+    worker = getattr(request.app.state, "worker", None)
+    if worker is not None:
+        worker.submit(inv.id)
+    return out
 
 
 @router.get("", response_model=Page[InvestigationOut])

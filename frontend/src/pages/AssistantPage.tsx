@@ -40,7 +40,7 @@ function AgentTurn({ turn, onUpdate }: { turn: Turn; onUpdate: (t: Turn) => void
       const next = { ...cur, events: [...cur.events, e] };
       turnRef.current = next;
       onUpdate(next);
-      if (e.type === "report_ready") {
+      if (e.type === "report_ready" || e.type === "failed") {
         void api.getInvestigation(turn.investigation.id).then((detail) => {
           const withDetail = { ...turnRef.current, detail };
           turnRef.current = withDetail;

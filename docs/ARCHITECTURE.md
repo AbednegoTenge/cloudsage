@@ -138,13 +138,26 @@ them without the model retyping any numbers:
 
 ### Investigation lifecycle
 ```
-POST /api/v1/investigations  → status=queued
-   background task: orchestrator.run()
-     → events: planning → tool_call(start/end)* → analyzing → report
-     → each event persisted (InvestigationEvent) AND pushed to SSE subscribers
-   → status=completed | failed | timed_out
+POST /api/v1/investigations  → status=queued, committed, handed to InvestigationWorker
+   worker (bounded concurrency) → agent/orchestrator.run_investigation()
+     → status=running, event planning
+     → AwsContext for the connection (temporary STS credentials, one account/region/window)
+     → investigator agent (Strands, read-only tools only, sequential tool execution)
+         each call: tool_started → ToolRunner → tool_completed | tool_failed (committed live)
+     → report agent (no tools) → analyzing → report_ready
+   → status=completed | failed | timed_out (event failed carries the reason)
 GET  /api/v1/investigations/{id}/stream   (SSE)  replays persisted events, then live
 ```
+
+- Limits: tool calls and wall-clock time are the lower of the server settings and the user's own
+  settings. Gathering evidence gets 70% of the time; if it runs out, the report is still written
+  from what was collected. If the whole budget runs out, the status is `timed_out`.
+- Tool results reach the investigator as nonce-tagged untrusted data, the same way the report
+  model sees evidence.
+- After any cancellation, the outcome is recorded on a fresh database session, and any tool
+  call left `running` is closed as failed.
+- On startup, investigations left `running` by a restart are marked failed and `queued` ones
+  are started again. `CLOUDSAGE_INVESTIGATION_AUTOSTART=false` turns the in-process worker off.
 
 Raw evidence (`ToolExecution.output`) is stored **separately** from the AI-generated
 `InvestigationReport`, so reports can always be audited against what AWS actually returned.

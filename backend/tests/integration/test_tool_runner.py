@@ -100,8 +100,9 @@ def test_successful_calls_become_evidence(api: TestClient, db_settings, connecti
     ]
     assert all(t["status"] == "succeeded" and t["durationMs"] >= 0 for t in tools)
     assert tools[0]["input"] == {"instance_ids": ["i-0a1b2c3d4e5f67890"], "only_impaired": False}
-    assert [e["type"] for e in detail["events"]][1:] == ["tool_completed"] * 4
+    assert [e["type"] for e in detail["events"]][1:] == ["tool_started", "tool_completed"] * 4
     assert detail["events"][1]["toolExecutionId"] == tools[0]["id"]
+    assert detail["events"][2]["toolExecutionId"] == tools[0]["id"]
 
 
 def test_failures_are_recorded_not_raised(api: TestClient, db_settings, connection):
@@ -130,7 +131,7 @@ def test_failures_are_recorded_not_raised(api: TestClient, db_settings, connecti
     assert "outside the investigation window" in results[3].error
     detail = api.get(f"/api/v1/investigations/{inv_id}").json()
     assert [t["status"] for t in detail["toolExecutions"]] == ["failed"] * 4
-    assert [e["type"] for e in detail["events"]][1:] == ["tool_failed"] * 4
+    assert [e["type"] for e in detail["events"]][1:] == ["tool_started", "tool_failed"] * 4
 
 
 def test_tool_call_limit(api: TestClient, db_settings, connection):

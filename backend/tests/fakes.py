@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from typing import Any
 
 from strands.models.model import Model
+
+
+@dataclass
+class ToolCall:
+    """A scripted response that calls one named tool."""
+
+    name: str
+    input: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class Sleep:
+    """A scripted response that hangs, to exercise timeouts."""
+
+    seconds: float
 
 
 class ScriptedModel(Model):
@@ -16,7 +33,9 @@ class ScriptedModel(Model):
     Every request is recorded so tests can inspect exactly what the model was shown.
     """
 
-    def __init__(self, *responses: dict[str, Any] | str, model_id: str = "scripted-model"):
+    def __init__(
+        self, *responses: dict[str, Any] | str | ToolCall | Sleep, model_id: str = "scripted-model"
+    ):
         self.responses = list(responses)
         self.requests: list[dict[str, Any]] = []
         self.config = {"model_id": model_id}
@@ -40,6 +59,9 @@ class ScriptedModel(Model):
         if not self.responses:
             raise AssertionError("ScriptedModel ran out of responses")
         response = self.responses.pop(0)
+        if isinstance(response, Sleep):
+            await asyncio.sleep(response.seconds)
+            raise AssertionError("ScriptedModel slept past its timeout")
         yield {"messageStart": {"role": "assistant"}}
         if isinstance(response, str):
             yield {"contentBlockStart": {"start": {}}}
@@ -47,13 +69,16 @@ class ScriptedModel(Model):
             yield {"contentBlockStop": {}}
             yield {"messageStop": {"stopReason": "end_turn"}}
             return
-        name = (tool_specs or [{}])[-1].get("name", "ReportDraft")
+        if isinstance(response, ToolCall):
+            name, payload = response.name, response.input
+        else:
+            name, payload = (tool_specs or [{}])[-1].get("name", "ReportDraft"), response
         yield {
             "contentBlockStart": {
                 "start": {"toolUse": {"toolUseId": f"t{len(self.requests)}", "name": name}}
             }
         }
-        yield {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps(response)}}}}
+        yield {"contentBlockDelta": {"delta": {"toolUse": {"input": json.dumps(payload)}}}}
         yield {"contentBlockStop": {}}
         yield {"messageStop": {"stopReason": "tool_use"}}
 
@@ -64,3 +89,14 @@ class ScriptedModel(Model):
                 if "text" in block:
                     parts.append(block["text"])
         return "\n".join(parts)
+
+    def tool_results(self) -> list[str]:
+        """Text of every tool result the model was shown, in order."""
+        seen: list[str] = []
+        for req in self.requests:
+            for m in req["messages"]:
+                for block in m.get("content", []):
+                    for c in block.get("toolResult", {}).get("content", []):
+                        if "text" in c and c["text"] not in seen:
+                            seen.append(c["text"])
+        return seen

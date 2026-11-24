@@ -19,8 +19,8 @@ networking, hosting, CI/CD) is owned by the infrastructure engineer and is out o
 | 2 | Backend API and PostgreSQL | **Done** (models, migrations, versioned REST API, SSE, per-user isolation; UI wired to the API) |
 | 3 | Amazon Bedrock integration | **Done** (Strands + Bedrock model from settings, injection-resistant evidence handling, evidence-cited report synthesis) |
 | 4 | EC2 and CloudWatch tools | **Done** (read-only EC2 and CloudWatch tools, scoped STS sessions, evidence recording, live EC2 discovery) |
-| 5 | Agent orchestration, multi-step investigations, SSE | Next |
-| 6 | ECS, RDS, Lambda | Planned |
+| 5 | Agent orchestration, multi-step investigations, SSE | **Done** (background worker, investigator agent over the read-only tools, live progress, limits, restart recovery) |
+| 6 | ECS, RDS, Lambda | Next |
 | 7 | History/reports on real data, security hardening | Planned |
 | 8 | Testing, Docker, deployment documentation | Planned |
 
@@ -86,7 +86,9 @@ then put `-r requirements.txt` back at the top of `requirements-dev.txt`.
 | GET | `/api/v1/dashboard` | Overview aggregates |
 | GET / PUT | `/api/v1/settings` | Per-user preferences |
 
-Investigations stay `queued` until the agent runs them (Phase 5).
+New investigations start straight away in the API process. The agent gathers evidence with the
+read-only tools, and progress streams over SSE. The report is then written from the recorded
+evidence. Without Bedrock configured, an investigation fails at once with a message saying so.
 
 ### Amazon Bedrock
 Set `CLOUDSAGE_BEDROCK_MODEL_ID` and `CLOUDSAGE_BEDROCK_REGION`, make AWS credentials available
