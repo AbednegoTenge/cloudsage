@@ -40,6 +40,12 @@ def mock_client_factory(account_id: str, region: str, now: datetime):
             return _CloudWatch(region, now)
         if service == "logs":
             return _Logs(region, now)
+        if service == "ecs":
+            return _Ecs(account_id, region, now)
+        if service == "rds":
+            return _Rds(region, now)
+        if service == "lambda":
+            return _Lambda(account_id, region, now)
         raise NotImplementedError(f"No mock client for {service}")
 
     return factory
@@ -304,3 +310,281 @@ class _Logs:
                 if not logGroupNamePrefix or g.startswith(logGroupNamePrefix)
             ][:limit]
         }
+
+
+# ---------- ECS, RDS, Lambda (Phase 6) ----------
+
+
+class _EcsExceptions:
+    class ClusterNotFoundException(Exception):
+        pass
+
+
+class _Ecs:
+    exceptions = _EcsExceptions
+
+    def __init__(self, account_id: str, region: str, now: datetime) -> None:
+        self.account_id, self.region, self.now = account_id, region, now
+
+    def _arn(self, kind: str, path: str) -> str:
+        return f"arn:aws:ecs:{self.region}:{self.account_id}:{kind}/{path}"
+
+    def _services(self) -> dict[str, dict[str, dict]]:
+        if self.region == "us-east-1":
+            return {
+                "prod-core": {
+                    "payments-api": {
+                        "desired": 4,
+                        "running": 2,
+                        "pending": 1,
+                        "td": "payments-api:42",
+                        "deployments": [
+                            ("PRIMARY", "IN_PROGRESS", "payments-api:43", 4, 1, 6, 18),
+                            ("ACTIVE", "COMPLETED", "payments-api:42", 4, 2, 0, 1440),
+                        ],
+                        "events": [
+                            (2, "(service payments-api) has started 1 tasks: (task 9f1c...)."),
+                            (
+                                4,
+                                "(service payments-api) deployment ecs-svc/4417 has 6 failed "
+                                "tasks; tasks stopped with exit code 137 (OutOfMemoryError).",
+                            ),
+                            (
+                                18,
+                                "(service payments-api) has begun a deployment of "
+                                "task definition payments-api:43.",
+                            ),
+                        ],
+                    },
+                    "checkout": {
+                        "desired": 3,
+                        "running": 3,
+                        "pending": 0,
+                        "td": "checkout:17",
+                        "deployments": [("PRIMARY", "COMPLETED", "checkout:17", 3, 3, 0, 4000)],
+                        "events": [(12, "(service checkout) has reached a steady state.")],
+                    },
+                }
+            }
+        if self.region == "eu-west-1":
+            return {
+                "prod-eu": {
+                    "auth-service": {
+                        "desired": 2,
+                        "running": 2,
+                        "pending": 0,
+                        "td": "auth-service:9",
+                        "deployments": [("PRIMARY", "COMPLETED", "auth-service:9", 2, 2, 0, 9000)],
+                        "events": [(30, "(service auth-service) has reached a steady state.")],
+                    }
+                }
+            }
+        return {}
+
+    def list_clusters(self, **_: Any) -> dict:
+        return {"clusterArns": [self._arn("cluster", c) for c in self._services()]}
+
+    def list_services(self, cluster: str, **_: Any) -> dict:
+        name = cluster.rsplit("/", 1)[-1]
+        if name not in self._services():
+            raise _EcsExceptions.ClusterNotFoundException(cluster)
+        return {
+            "serviceArns": [self._arn("service", f"{name}/{s}") for s in self._services()[name]]
+        }
+
+    def describe_services(self, cluster: str, services: list[str], **_: Any) -> dict:
+        cname = cluster.rsplit("/", 1)[-1]
+        known = self._services().get(cname, {})
+        out, failures = [], []
+        for ref in services:
+            sname = ref.rsplit("/", 1)[-1]
+            s = known.get(sname)
+            if not s:
+                failures.append(
+                    {"arn": self._arn("service", f"{cname}/{sname}"), "reason": "MISSING"}
+                )
+                continue
+            out.append(
+                {
+                    "serviceName": sname,
+                    "serviceArn": self._arn("service", f"{cname}/{sname}"),
+                    "status": "ACTIVE",
+                    "launchType": "FARGATE",
+                    "desiredCount": s["desired"],
+                    "runningCount": s["running"],
+                    "pendingCount": s["pending"],
+                    "taskDefinition": self._arn("task-definition", s["td"]),
+                    "deployments": [
+                        {
+                            "status": st,
+                            "rolloutState": ro,
+                            "taskDefinition": self._arn("task-definition", td),
+                            "desiredCount": d,
+                            "runningCount": r,
+                            "failedTasks": f,
+                            "createdAt": self.now - timedelta(minutes=m),
+                            "updatedAt": self.now - timedelta(minutes=min(m, 2)),
+                            "rolloutStateReason": "ECS deployment ecs-svc/4417 in progress."
+                            if ro == "IN_PROGRESS"
+                            else None,
+                        }
+                        for st, ro, td, d, r, f, m in s["deployments"]
+                    ],
+                    "events": [
+                        {"createdAt": self.now - timedelta(minutes=m), "message": msg}
+                        for m, msg in s["events"]
+                    ],
+                }
+            )
+        return {"services": out, "failures": failures}
+
+    def list_tasks(self, cluster: str, serviceName: str | None = None, **_: Any) -> dict:  # noqa: N803
+        cname = cluster.rsplit("/", 1)[-1]
+        if cname not in self._services():
+            raise _EcsExceptions.ClusterNotFoundException(cluster)
+        if cname == "prod-core" and serviceName in (None, "payments-api"):
+            return {"taskArns": [self._arn("task", f"prod-core/{i:032x}") for i in (0xA1, 0xB2)]}
+        return {"taskArns": []}
+
+    def describe_tasks(self, cluster: str, tasks: list[str], **_: Any) -> dict:
+        return {
+            "tasks": [
+                {
+                    "taskArn": t,
+                    "group": "service:payments-api",
+                    "taskDefinitionArn": self._arn("task-definition", "payments-api:43"),
+                    "lastStatus": "STOPPED",
+                    "stopCode": "EssentialContainerExited",
+                    "stoppedReason": "Essential container in task exited",
+                    "startedAt": self.now - timedelta(minutes=9 + i * 4),
+                    "stoppedAt": self.now - timedelta(minutes=6 + i * 4),
+                    "containers": [
+                        {
+                            "name": "app",
+                            "lastStatus": "STOPPED",
+                            "exitCode": 137,
+                            "reason": "OutOfMemoryError: Container killed due to memory usage",
+                        }
+                    ],
+                }
+                for i, t in enumerate(tasks)
+            ]
+        }
+
+
+class _RdsExceptions:
+    class DBInstanceNotFoundFault(Exception):
+        pass
+
+
+class _Rds:
+    exceptions = _RdsExceptions
+    _DBS = {
+        "orders-db": ("available", "db.r6g.large", 500, None, ["reporting-replica"]),
+        "reporting-replica": ("storage-optimization", "db.r6g.large", 500, "orders-db", []),
+    }
+
+    def __init__(self, region: str, now: datetime) -> None:
+        self.region, self.now = region, now
+
+    def describe_db_instances(self, DBInstanceIdentifier: str | None = None, **_: Any) -> dict:  # noqa: N803
+        dbs = self._DBS if self.region == "us-east-1" else {}
+        if DBInstanceIdentifier and DBInstanceIdentifier not in dbs:
+            raise _RdsExceptions.DBInstanceNotFoundFault(DBInstanceIdentifier)
+        return {
+            "DBInstances": [
+                {
+                    "DBInstanceIdentifier": k,
+                    "DBInstanceStatus": st,
+                    "Engine": "postgres",
+                    "EngineVersion": "16.4",
+                    "DBInstanceClass": cls,
+                    "AllocatedStorage": gb,
+                    "MaxAllocatedStorage": 1000,
+                    "StorageType": "gp3",
+                    "MultiAZ": src is None,
+                    "AvailabilityZone": "us-east-1a",
+                    "ReadReplicaSourceDBInstanceIdentifier": src,
+                    "ReadReplicaDBInstanceIdentifiers": reps,
+                    "PendingModifiedValues": {},
+                    "PreferredMaintenanceWindow": "sun:04:00-sun:04:30",
+                    "InstanceCreateTime": self.now - timedelta(days=400),
+                }
+                for k, (st, cls, gb, src, reps) in dbs.items()
+                if not DBInstanceIdentifier or k == DBInstanceIdentifier
+            ]
+        }
+
+    def describe_events(self, SourceIdentifier: str, StartTime, EndTime, **_: Any) -> dict:  # noqa: N803
+        events = (
+            {
+                "reporting-replica": [
+                    (50, "Storage optimization started.", ["notification"]),
+                    (49, "Replica lag exceeded 300 seconds.", ["read replica"]),
+                ],
+                "orders-db": [(300, "Finished DB Instance backup", ["backup"])],
+            }.get(SourceIdentifier, [])
+            if self.region == "us-east-1"
+            else []
+        )
+        return {
+            "Events": [
+                {
+                    "Date": self.now - timedelta(minutes=m),
+                    "Message": msg,
+                    "EventCategories": cats,
+                    "SourceIdentifier": SourceIdentifier,
+                }
+                for m, msg, cats in events
+                if StartTime <= self.now - timedelta(minutes=m) <= EndTime
+            ]
+        }
+
+
+class _LambdaExceptions:
+    class ResourceNotFoundException(Exception):
+        pass
+
+
+class _Lambda:
+    exceptions = _LambdaExceptions
+    _FNS = {
+        "us-west-2": {"order-processor": ("python3.12", 512, 30, 137)},
+        "us-east-1": {
+            "invoice-renderer": ("nodejs20.x", 1024, 60, 60),
+            "audit-event-archiver": ("python3.12", 256, 120, 75),
+        },
+    }
+
+    def __init__(self, account_id: str, region: str, now: datetime) -> None:
+        self.account_id, self.region, self.now = account_id, region, now
+
+    def _cfg(self, name: str, spec: tuple) -> dict:
+        runtime, mem, timeout, mins = spec
+        return {
+            "FunctionName": name,
+            "FunctionArn": f"arn:aws:lambda:{self.region}:{self.account_id}:function:{name}",
+            "Runtime": runtime,
+            "Handler": "app.handler",
+            "MemorySize": mem,
+            "Timeout": timeout,
+            "PackageType": "Zip",
+            "Architectures": ["arm64"],
+            "LastModified": (self.now - timedelta(minutes=mins)).strftime(
+                "%Y-%m-%dT%H:%M:%S.000+0000"
+            ),
+            "Version": "$LATEST",
+            "State": "Active",
+            "LastUpdateStatus": "Successful",
+            "Environment": {"Variables": {"DB_PASSWORD": "never-returned"}},
+        }
+
+    def get_function_configuration(self, FunctionName: str, **_: Any) -> dict:  # noqa: N803
+        name = FunctionName.rsplit(":", 1)[-1] if FunctionName.startswith("arn:") else FunctionName
+        spec = self._FNS.get(self.region, {}).get(name)
+        if not spec:
+            raise _LambdaExceptions.ResourceNotFoundException(FunctionName)
+        return self._cfg(name, spec)
+
+    def list_functions(self, **_: Any) -> dict:
+        return {"Functions": [self._cfg(n, s) for n, s in self._FNS.get(self.region, {}).items()]}

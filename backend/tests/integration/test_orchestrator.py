@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.tools.base import REGISTRY
 from tests.conftest import ALICE, _sync_dsn, connection_body
 from tests.fakes import ScriptedModel, Sleep, ToolCall
 
@@ -143,14 +144,7 @@ def test_full_investigation(make_client):
 
     # The investigator saw only the read-only tools, and every result as untrusted data.
     names = {s["name"] for s in model.requests[0]["tool_specs"]}
-    assert names == {
-        "ec2_describe_instances",
-        "ec2_describe_instance_status",
-        "cloudwatch_get_metric_data",
-        "cloudwatch_describe_alarms",
-        "logs_filter_log_events",
-        "logs_describe_log_groups",
-    }
+    assert names == set(REGISTRY)
     results = model.tool_results()
     assert len(results) == 3 and all(r.startswith("<untrusted_data nonce=") for r in results)
 
@@ -247,3 +241,37 @@ def test_restart_recovery_marks_running_as_failed(make_client, db_settings):
     d = wait(c2, inv_id)
     assert d["investigation"]["status"] == "failed"
     assert "server restart" in d["events"][-1]["message"]
+
+
+def test_ecs_deployment_investigation(make_client):
+    model = ScriptedModel(
+        ToolCall("ecs_describe_services", {"cluster": "prod-core", "services": ["payments-api"]}),
+        ToolCall("ecs_describe_stopped_tasks", {"cluster": "prod-core", "service": "payments-api"}),
+        "The new deployment's tasks are being OOM-killed.",
+        REPORT
+        | {
+            "summary": "payments-api deployment is stuck: new tasks exit with code 137.",
+            "observations": [
+                {"statement": "Deployment is IN_PROGRESS with 6 failed tasks.", "evidence": ["E1"]},
+                {
+                    "statement": "Stopped tasks exited with code 137 (OutOfMemoryError).",
+                    "evidence": ["E2"],
+                },
+            ],
+            "hypotheses": [
+                {
+                    "title": "Memory limit too low",
+                    "statement": "Task def 43 needs more memory.",
+                    "confidence": "medium",
+                    "supporting_facts": ["F2"],
+                }
+            ],
+        },
+    )
+    c = make_client(model)
+    d = wait(c, start(c, "Why is the ECS service payments-api not finishing its deployment?"))
+    assert d["investigation"]["status"] == "completed"
+    assert d["investigation"]["services"] == ["ecs"]
+    assert [t["status"] for t in d["toolExecutions"]] == ["succeeded", "succeeded"]
+    assert d["toolExecutions"][1]["output"]["tasks"][0]["containers"][0]["exitCode"] == 137
+    assert len(d["report"]["observations"]) == 2

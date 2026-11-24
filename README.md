@@ -20,8 +20,8 @@ networking, hosting, CI/CD) is owned by the infrastructure engineer and is out o
 | 3 | Amazon Bedrock integration | **Done** (Strands + Bedrock model from settings, injection-resistant evidence handling, evidence-cited report synthesis) |
 | 4 | EC2 and CloudWatch tools | **Done** (read-only EC2 and CloudWatch tools, scoped STS sessions, evidence recording, live EC2 discovery) |
 | 5 | Agent orchestration, multi-step investigations, SSE | **Done** (background worker, investigator agent over the read-only tools, live progress, limits, restart recovery) |
-| 6 | ECS, RDS, Lambda | Next |
-| 7 | History/reports on real data, security hardening | Planned |
+| 6 | ECS, RDS, Lambda | **Done** (read-only ECS, RDS and Lambda tools; live discovery for all four services) |
+| 7 | History/reports on real data, security hardening | Next |
 | 8 | Testing, Docker, deployment documentation | Planned |
 
 ## Local development
@@ -97,17 +97,28 @@ check access with `uv run python -m app.agent.check`. Tests never call Bedrock; 
 stand-in model.
 
 ### AWS tools
-Investigations gather evidence with read-only tools: `ec2_describe_instances`,
-`ec2_describe_instance_status`, `cloudwatch_get_metric_data`, `cloudwatch_describe_alarms`,
-`logs_filter_log_events` and `logs_describe_log_groups`. In `CLOUDSAGE_AWS_MODE=live` each
+Investigations gather evidence with read-only tools:
+
+| Service | Tools |
+|---|---|
+| EC2 | `ec2_describe_instances`, `ec2_describe_instance_status` |
+| ECS | `ecs_list_services`, `ecs_describe_services`, `ecs_describe_stopped_tasks` |
+| RDS | `rds_describe_db_instances`, `rds_describe_events` |
+| Lambda | `lambda_list_functions`, `lambda_get_function_configuration` (never returns environment variable values) |
+| CloudWatch | `cloudwatch_get_metric_data`, `cloudwatch_describe_alarms`, `logs_filter_log_events`, `logs_describe_log_groups` |
+ In `CLOUDSAGE_AWS_MODE=live` each
 investigation assumes the connection's role through STS and uses only those temporary
 credentials. In `mock` mode the same tools read a fixed sample story (an API worker whose disk
-filled up), so no AWS account is needed. Live discovery covers EC2 today; asking for ECS, RDS or
-Lambda in live mode returns 501 until Phase 6. Tests use moto and never reach AWS.
+filled up, and an ECS deployment whose tasks run out of memory), so no AWS account is needed.
+Live discovery covers all four services. Lambda health is `unknown` unless the function's state
+is failed or pending, because configuration says nothing about errors. Tests use moto and never
+reach AWS.
 
 The role needs only read permissions for these calls: `ec2:DescribeInstances`,
-`ec2:DescribeInstanceStatus`, `cloudwatch:GetMetricData`, `cloudwatch:DescribeAlarms`,
-`logs:FilterLogEvents` and `logs:DescribeLogGroups`. CloudSage does not create the role.
+`ec2:DescribeInstanceStatus`, `ecs:ListClusters`, `ecs:ListServices`, `ecs:DescribeServices`,
+`ecs:ListTasks`, `ecs:DescribeTasks`, `rds:DescribeDBInstances`, `rds:DescribeEvents`,
+`lambda:ListFunctions`, `lambda:GetFunctionConfiguration`, `cloudwatch:GetMetricData`,
+`cloudwatch:DescribeAlarms`, `logs:FilterLogEvents` and `logs:DescribeLogGroups`. CloudSage does not create the role.
 
 All configuration comes from environment variables (see each `.env.example`). No AWS credentials,
 account IDs, regions or Bedrock model IDs are hardcoded.

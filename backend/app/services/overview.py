@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.aws.discovery import LIVE_SERVICES, discover_ec2
+from app.aws.discovery import LIVE_SERVICES, discover
 from app.aws.mock import mock_resources
 from app.aws.session import AssumeRoleError, client_error_message
 from app.core.config import AwsMode, Settings
@@ -19,10 +19,6 @@ from app.services.connections import parse_uuid
 from app.services.errors import NotFound, ServiceError
 
 SERVICES = ("ec2", "ecs", "rds", "lambda")
-
-
-class NotImplementedYet(ServiceError):
-    status_code = 501
 
 
 class UpstreamError(ServiceError):
@@ -46,12 +42,10 @@ async def discover_resources(
             out.extend(mock_resources(c.account_id, list(c.allowed_regions), service))
     else:
         if service and service not in LIVE_SERVICES:
-            raise NotImplementedYet(
-                f"Live {service} discovery arrives with the {service} tools (Phase 6)"
-            )
+            raise NotFound(f"Unknown service: {service}")
         for c in conns:
             try:
-                out.extend(await discover_ec2(settings, c))
+                out.extend(await discover(settings, c, service))
             except AssumeRoleError as e:
                 raise UpstreamError(f"Could not access connection '{c.name}': {e}") from None
             except (ClientError, BotoCoreError) as e:
