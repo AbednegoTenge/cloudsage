@@ -71,3 +71,47 @@ def test_unreachable_account_is_a_clear_error(live_api, monkeypatch):
     assert "Could not access connection 'prod-us-east-1'" in r.json()["detail"]
     # The dashboard degrades gracefully instead of failing.
     assert live_api.get("/api/v1/dashboard").status_code == 200
+
+
+def test_discovers_ecs_rds_and_lambda(live_api):
+    import io
+    import zipfile
+
+    boto3.client("iam").create_role(RoleName="CloudSageReadOnly", AssumeRolePolicyDocument="{}")
+    ecs = boto3.client("ecs", region_name="us-east-1")
+    ecs.create_cluster(clusterName="prod")
+    ecs.register_task_definition(
+        family="api", containerDefinitions=[{"name": "app", "image": "nginx", "memory": 256}]
+    )
+    ecs.create_service(cluster="prod", serviceName="api", taskDefinition="api", desiredCount=1)
+    boto3.client("rds", region_name="us-west-2").create_db_instance(
+        DBInstanceIdentifier="orders-db",
+        DBInstanceClass="db.t3.micro",
+        Engine="postgres",
+        MasterUsername="admin",
+        MasterUserPassword="pw-123456789",
+        AllocatedStorage=20,
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("app.py", "def handler(e, c):\n    return 1\n")
+    role = boto3.client("iam").create_role(RoleName="fn", AssumeRolePolicyDocument="{}")
+    boto3.client("lambda", region_name="us-east-1").create_function(
+        FunctionName="invoice-renderer",
+        Runtime="python3.12",
+        Role=role["Role"]["Arn"],
+        Handler="app.handler",
+        Code={"ZipFile": buf.getvalue()},
+    )
+    assert live_api.post("/api/v1/connections", json=connection_body()).status_code == 201
+
+    found = {
+        (r["service"], r["name"], r["region"]) for r in live_api.get("/api/v1/resources").json()
+    }
+    assert found == {
+        ("ecs", "api", "us-east-1"),
+        ("rds", "orders-db", "us-west-2"),
+        ("lambda", "invoice-renderer", "us-east-1"),
+    }
+    only_rds = live_api.get("/api/v1/resources", params={"service": "rds"}).json()
+    assert [r["name"] for r in only_rds] == ["orders-db"]

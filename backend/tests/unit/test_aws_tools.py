@@ -212,10 +212,10 @@ def test_logs(aws):
 
 
 def test_every_registered_operation_is_read_only():
-    assert len(REGISTRY) == 6
+    assert len(REGISTRY) == 13
     for spec in REGISTRY.values():
         assert spec.operations and all(op.startswith(READ_ONLY_PREFIXES) for op in spec.operations)
-        assert spec.description and spec.service in {"ec2", "cloudwatch"}
+        assert spec.description and spec.service in {"ec2", "cloudwatch", "ecs", "rds", "lambda"}
 
 
 def test_write_operations_cannot_be_registered():
